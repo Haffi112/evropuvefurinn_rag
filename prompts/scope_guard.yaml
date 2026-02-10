@@ -1,0 +1,11 @@
+version: "1.0"
+
+task: |
+  Classify whether the following question is within scope for a Q&A site
+  about the European Union, EEA, and Iceland-Europe relations.
+
+  Respond with exactly one word: "yes", "adjacent", or "no".
+
+  - "yes": clearly about EU/EEA/European integration/Iceland-EU relations
+  - "adjacent": related topic that could connect to EU (e.g. NATO in European context, trade policy affecting EU)
+  - "no": clearly off-topic (e.g. "What is the capital of Japan?", "Write me a poem")

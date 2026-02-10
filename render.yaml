@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: evropuvefur-api
+    runtime: python
+    plan: starter
+    rootDir: evropuvefur_api
+    buildCommand: pip install .
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: evropuvefur-db
+          property: connectionURI
+      - key: PINECONE_API_KEY
+        sync: false
+      - key: PINECONE_INDEX_NAME
+        value: evropuvefur
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: CMS_API_KEY
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://www.evropuvefur.is,https://evropuvefur.is
+
+databases:
+  - name: evropuvefur-db
+    plan: starter
+    databaseName: evropuvefur
+    postgresMajorVersion: "15"
