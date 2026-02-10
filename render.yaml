@@ -13,7 +13,7 @@ services:
       - key: DATABASE_URL
         fromDatabase:
           name: evropuvefur-db
-          property: connectionURI
+          property: connectionString
       - key: PINECONE_API_KEY
         sync: false
       - key: PINECONE_INDEX_NAME
