@@ -26,6 +26,6 @@ services:
 
 databases:
   - name: evropuvefur-db
-    plan: starter
+    plan: basic-256mb
     databaseName: evropuvefur
     postgresMajorVersion: "15"
