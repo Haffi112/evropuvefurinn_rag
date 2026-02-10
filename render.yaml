@@ -3,7 +3,6 @@ services:
     name: evropuvefur-api
     runtime: python
     plan: starter
-    rootDir: evropuvefur_api
     buildCommand: pip install .
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/v1/health
