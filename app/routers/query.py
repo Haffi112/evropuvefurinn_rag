@@ -1,4 +1,5 @@
 import logging
+import time
 
 from fastapi import APIRouter, Request
 from sse_starlette.sse import EventSourceResponse
@@ -20,11 +21,19 @@ def _get_rag(request: Request) -> RAGService:
 @limiter.limit("10/minute")
 async def query_endpoint(request: Request, body: QueryRequest):
     rag = _get_rag(request)
+    ip_address = request.client.host if request.client else None
+    start_time = time.monotonic()
 
     if body.stream:
         return EventSourceResponse(
-            rag.process_query_stream(body.query, body.top_k, body.language)
+            rag.process_query_stream(
+                body.query, body.top_k, body.language,
+                ip_address=ip_address, start_time=start_time,
+            )
         )
 
-    response = await rag.process_query_json(body.query, body.top_k, body.language)
+    response = await rag.process_query_json(
+        body.query, body.top_k, body.language,
+        ip_address=ip_address, start_time=start_time,
+    )
     return response

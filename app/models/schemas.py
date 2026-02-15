@@ -116,6 +116,38 @@ class StatsResponse(BaseModel):
     vectors: dict
 
 
+# ── Query log schemas ───────────────────────────────────────
+
+
+class QueryLogEntry(BaseModel):
+    id: int
+    query_text: str
+    response_text: str | None = None
+    model_used: str | None = None
+    references: list[dict] = Field(default_factory=list)
+    scope_declined: bool = False
+    cached: bool = False
+    latency_ms: int | None = None
+    ip_address: str | None = None
+    created_at: datetime
+
+
+class QueryLogListResponse(BaseModel):
+    logs: list[QueryLogEntry]
+    total: int
+    page: int
+    per_page: int
+    total_pages: int
+
+
+class QueryLogStatsResponse(BaseModel):
+    total_queries: int
+    today_queries: int
+    cached_queries: int
+    declined_queries: int
+    avg_latency_ms: int
+
+
 # ── Error schemas ────────────────────────────────────────────
 
 class ErrorDetail(BaseModel):

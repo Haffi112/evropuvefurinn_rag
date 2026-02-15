@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import time
 import uuid
 
 from app.config import Settings
@@ -34,39 +35,67 @@ class RAGService:
         self._embeddings = embeddings
         self._gemini = gemini
 
+    async def _log_query(
+        self, query_text: str, response_text: str | None, model_used: str | None,
+        references: list | None, scope_declined: bool, cached: bool,
+        start_time: float | None, ip_address: str | None,
+    ) -> None:
+        try:
+            latency_ms = round((time.monotonic() - start_time) * 1000) if start_time else None
+            await db.insert_query_log(
+                query_text=query_text, response_text=response_text,
+                model_used=model_used, references=references,
+                scope_declined=scope_declined, cached=cached,
+                latency_ms=latency_ms, ip_address=ip_address,
+            )
+        except Exception:
+            logger.warning("Failed to write query log", exc_info=True)
+
     # ── JSON (non-streaming) mode ────────────────────────────
 
-    async def process_query_json(self, query: str, top_k: int, language: str) -> QueryResponse:
+    async def process_query_json(
+        self, query: str, top_k: int, language: str,
+        ip_address: str | None = None, start_time: float | None = None,
+    ) -> QueryResponse:
         query_id = f"q_{uuid.uuid4().hex[:12]}"
         qhash = _query_hash(query)
 
         # Cache check
         cached = await db.cache_get(qhash)
         if cached:
-            return QueryResponse(**cached, cached=True, query_id=query_id)
+            resp = QueryResponse(**cached, cached=True, query_id=query_id)
+            await self._log_query(query, cached.get("answer"), cached.get("model_used"),
+                                  cached.get("references", []), False, True, start_time, ip_address)
+            return resp
 
         # Scope guard
         scope = await self._gemini.check_scope(query)
         if scope == "no":
             decline = DECLINE_EN if language == "en" else DECLINE_IS
-            return QueryResponse(
+            resp = QueryResponse(
                 query=query, answer=decline, references=[],
                 model_used=self._settings.gemini_flash_model,
                 cached=False, query_id=query_id, scope_declined=True,
             )
+            await self._log_query(query, decline, self._settings.gemini_flash_model,
+                                  [], True, False, start_time, ip_address)
+            return resp
 
         # Vector search
         matches = await self._embeddings.query(query, top_k=top_k)
         article_ids = [m["id"] for m in matches if m["score"] >= self._settings.rag_score_threshold]
         if not article_ids:
-            return QueryResponse(
-                query=query,
-                answer="Engar greinar fundust í þekkingargrunni sem tengjast þessari spurningu."
-                       if language != "en"
-                       else "No articles found in the knowledge base related to this question.",
+            no_result = ("Engar greinar fundust í þekkingargrunni sem tengjast þessari spurningu."
+                         if language != "en"
+                         else "No articles found in the knowledge base related to this question.")
+            resp = QueryResponse(
+                query=query, answer=no_result,
                 references=[], model_used=self._settings.gemini_flash_model,
                 cached=False, query_id=query_id,
             )
+            await self._log_query(query, no_result, self._settings.gemini_flash_model,
+                                  [], False, False, start_time, ip_address)
+            return resp
 
         # Fetch full articles
         articles = await db.get_articles_by_ids(article_ids)
@@ -94,14 +123,20 @@ class RAGService:
         cache_data.pop("cached", None)
         cache_data.pop("query_id", None)
         # Convert Reference objects and datetimes to serialisable form
-        cache_data["references"] = [r.model_dump() for r in references]
+        refs_dicts = [r.model_dump() for r in references]
+        cache_data["references"] = refs_dicts
         await db.cache_store(qhash, query, cache_data, article_ids, self._settings.query_cache_ttl_hours)
 
+        await self._log_query(query, answer_text, model_used,
+                              refs_dicts, False, False, start_time, ip_address)
         return response
 
     # ── SSE (streaming) mode ─────────────────────────────────
 
-    async def process_query_stream(self, query: str, top_k: int, language: str):
+    async def process_query_stream(
+        self, query: str, top_k: int, language: str,
+        ip_address: str | None = None, start_time: float | None = None,
+    ):
         """Yields dicts with 'event' and 'data' keys for sse-starlette."""
         query_id = f"q_{uuid.uuid4().hex[:12]}"
         qhash = _query_hash(query)
@@ -121,6 +156,8 @@ class RAGService:
                     "cached": True, "query_id": query_id,
                 }),
             }
+            await self._log_query(query, cached.get("answer"), cached.get("model_used"),
+                                  cached.get("references", []), False, True, start_time, ip_address)
             return
 
         # Status: searching
@@ -140,6 +177,8 @@ class RAGService:
                     "cached": False, "query_id": query_id, "scope_declined": True,
                 }),
             }
+            await self._log_query(query, decline, self._settings.gemini_flash_model,
+                                  [], True, False, start_time, ip_address)
             return
 
         # Vector search
@@ -162,6 +201,8 @@ class RAGService:
                 "event": "done",
                 "data": json.dumps({"model_used": "none", "cached": False, "query_id": query_id}),
             }
+            await self._log_query(query, no_result, "none",
+                                  [], False, False, start_time, ip_address)
             return
 
         # Fetch full articles
@@ -201,3 +242,5 @@ class RAGService:
             "model_used": model_used,
         }
         await db.cache_store(qhash, query, cache_data, article_ids, self._settings.query_cache_ttl_hours)
+        await self._log_query(query, answer_text, model_used,
+                              references, False, False, start_time, ip_address)

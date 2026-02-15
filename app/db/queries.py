@@ -213,3 +213,114 @@ async def get_cache_hit_rate() -> float:
     async with pool.acquire() as conn:
         total = await conn.fetchval("SELECT count(*) FROM query_cache")
         return 0.0 if total == 0 else round(total / max(total, 1), 2)
+
+
+# ── Query Log ───────────────────────────────────────────────
+
+async def insert_query_log(
+    query_text: str,
+    response_text: str | None,
+    model_used: str | None,
+    references: list[dict] | None,
+    scope_declined: bool,
+    cached: bool,
+    latency_ms: int | None,
+    ip_address: str | None,
+) -> int:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            """
+            INSERT INTO query_log
+                (query_text, response_text, model_used, "references",
+                 scope_declined, cached, latency_ms, ip_address)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id
+            """,
+            query_text,
+            response_text,
+            model_used,
+            json.dumps(references or []),
+            scope_declined,
+            cached,
+            latency_ms,
+            ip_address,
+        )
+
+
+async def list_query_logs(
+    page: int,
+    per_page: int,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    cached: bool | None = None,
+    model_used: str | None = None,
+    scope_declined: bool | None = None,
+    search: str | None = None,
+) -> tuple[list[dict], int]:
+    pool = get_pool()
+    offset = (page - 1) * per_page
+
+    conditions: list[str] = []
+    params: list = []
+    idx = 1
+
+    if date_from is not None:
+        conditions.append(f"created_at >= ${idx}")
+        params.append(date_from)
+        idx += 1
+    if date_to is not None:
+        conditions.append(f"created_at <= ${idx}")
+        params.append(date_to)
+        idx += 1
+    if cached is not None:
+        conditions.append(f"cached = ${idx}")
+        params.append(cached)
+        idx += 1
+    if model_used is not None:
+        conditions.append(f"model_used = ${idx}")
+        params.append(model_used)
+        idx += 1
+    if scope_declined is not None:
+        conditions.append(f"scope_declined = ${idx}")
+        params.append(scope_declined)
+        idx += 1
+    if search:
+        conditions.append(f"query_text ILIKE ${idx}")
+        params.append(f"%{search}%")
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(
+            f"SELECT count(*) FROM query_log {where}", *params
+        )
+        rows = await conn.fetch(
+            f"""
+            SELECT id, query_text, response_text, model_used, "references",
+                   scope_declined, cached, latency_ms, ip_address, created_at
+            FROM query_log {where}
+            ORDER BY created_at DESC
+            LIMIT ${idx} OFFSET ${idx + 1}
+            """,
+            *params, per_page, offset,
+        )
+        return [dict(r) for r in rows], total
+
+
+async def get_query_log_stats() -> dict:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                count(*)                                          AS total_queries,
+                count(*) FILTER (WHERE created_at >= CURRENT_DATE) AS today_queries,
+                count(*) FILTER (WHERE cached = TRUE)             AS cached_queries,
+                count(*) FILTER (WHERE scope_declined = TRUE)     AS declined_queries,
+                COALESCE(avg(latency_ms), 0)::INTEGER             AS avg_latency_ms
+            FROM query_log
+            """
+        )
+        return dict(row)

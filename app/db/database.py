@@ -50,6 +50,20 @@ CREATE TABLE IF NOT EXISTS daily_quota (
 CREATE INDEX IF NOT EXISTS idx_articles_embedding_hnsw
     ON articles USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
+
+CREATE TABLE IF NOT EXISTS query_log (
+    id              BIGSERIAL PRIMARY KEY,
+    query_text      TEXT NOT NULL,
+    response_text   TEXT,
+    model_used      TEXT,
+    "references"    JSONB NOT NULL DEFAULT '[]',
+    scope_declined  BOOLEAN NOT NULL DEFAULT FALSE,
+    cached          BOOLEAN NOT NULL DEFAULT FALSE,
+    latency_ms      INTEGER,
+    ip_address      TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_query_log_created_at ON query_log (created_at DESC);
 """
 
 MIGRATION_SQL = """
