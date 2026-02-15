@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from pathlib import Path
 
 import yaml
@@ -145,14 +146,13 @@ class GeminiService:
                     json_buffer.append(part.text)
 
                     if state == "before":
-                        # Check if we've accumulated enough to find "answer":"
+                        # Check if we've accumulated enough to find "answer": "
                         joined = "".join(json_buffer)
-                        marker = '"answer":"'
-                        idx = joined.find(marker)
-                        if idx != -1:
+                        match = re.search(r'"answer"\s*:\s*"', joined)
+                        if match:
                             state = "in_answer"
                             # Anything after the marker is answer content
-                            after_marker = joined[idx + len(marker):]
+                            after_marker = joined[match.end():]
                             # Process this initial chunk through the answer parser
                             decoded = []
                             for ch in after_marker:
