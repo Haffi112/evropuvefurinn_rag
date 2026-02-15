@@ -7,7 +7,7 @@ from app.config import Settings
 from app.db import queries as db
 from app.models.schemas import QueryResponse, Reference
 from app.services.gemini_service import GeminiService
-from app.services.pinecone_service import PineconeService
+from app.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +29,9 @@ def _query_hash(query: str) -> str:
 
 
 class RAGService:
-    def __init__(self, settings: Settings, pinecone: PineconeService, gemini: GeminiService):
+    def __init__(self, settings: Settings, embeddings: EmbeddingService, gemini: GeminiService):
         self._settings = settings
-        self._pinecone = pinecone
+        self._embeddings = embeddings
         self._gemini = gemini
 
     # ── JSON (non-streaming) mode ────────────────────────────
@@ -56,7 +56,7 @@ class RAGService:
             )
 
         # Vector search
-        matches = await self._pinecone.query(query, top_k=top_k)
+        matches = await self._embeddings.query(query, top_k=top_k)
         article_ids = [m["id"] for m in matches if m["score"] >= self._settings.rag_score_threshold]
         if not article_ids:
             return QueryResponse(
@@ -143,7 +143,7 @@ class RAGService:
             return
 
         # Vector search
-        matches = await self._pinecone.query(query, top_k=top_k)
+        matches = await self._embeddings.query(query, top_k=top_k)
         article_ids = [m["id"] for m in matches if m["score"] >= self._settings.rag_score_threshold]
 
         top_score = matches[0]["score"] if matches else 0.0

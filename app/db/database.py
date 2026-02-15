@@ -1,12 +1,15 @@
 import logging
 
 import asyncpg
+from pgvector.asyncpg import register_vector
 
 logger = logging.getLogger(__name__)
 
 _pool: asyncpg.Pool | None = None
 
 SCHEMA_SQL = """
+CREATE EXTENSION IF NOT EXISTS vector;
+
 CREATE TABLE IF NOT EXISTS articles (
     id          TEXT PRIMARY KEY,
     title       TEXT NOT NULL,
@@ -17,6 +20,7 @@ CREATE TABLE IF NOT EXISTS articles (
     author      TEXT NOT NULL,
     categories  TEXT[] NOT NULL DEFAULT '{}',
     tags        TEXT[] NOT NULL DEFAULT '{}',
+    embedding   vector(1024),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ
 );
@@ -42,15 +46,41 @@ CREATE TABLE IF NOT EXISTS daily_quota (
     count       INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (model_id, date)
 );
+
+CREATE INDEX IF NOT EXISTS idx_articles_embedding_hnsw
+    ON articles USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
 """
+
+MIGRATION_SQL = """
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'articles' AND column_name = 'embedding'
+    ) THEN
+        ALTER TABLE articles ADD COLUMN embedding vector(1024);
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_articles_embedding_hnsw
+    ON articles USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+"""
+
+
+async def _init_connection(conn: asyncpg.Connection) -> None:
+    await register_vector(conn)
 
 
 async def init_pool(database_url: str) -> asyncpg.Pool:
     global _pool
-    _pool = await asyncpg.create_pool(database_url, min_size=2, max_size=10)
+    _pool = await asyncpg.create_pool(
+        database_url, min_size=2, max_size=10, init=_init_connection,
+    )
     async with _pool.acquire() as conn:
         await conn.execute(SCHEMA_SQL)
-    logger.info("Database pool initialized, schema ensured")
+        await conn.execute(MIGRATION_SQL)
+    logger.info("Database pool initialized, schema ensured (pgvector enabled)")
     return _pool
 
 

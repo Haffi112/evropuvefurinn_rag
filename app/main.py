@@ -9,7 +9,7 @@ from app.db.database import close_pool, init_pool
 from app.middleware.rate_limit import setup_rate_limiting
 from app.routers import articles, health, query
 from app.services.gemini_service import GeminiService
-from app.services.pinecone_service import PineconeService
+from app.services.embedding_service import EmbeddingService
 from app.services.rag_service import RAGService
 
 logger = logging.getLogger(__name__)
@@ -25,17 +25,17 @@ async def lifespan(app: FastAPI):
     # Start database
     await init_pool(settings.database_url)
 
-    # Start Pinecone
-    pc = PineconeService(settings)
-    await pc.initialize()
-    app.state.pinecone = pc
+    # Start Embeddings
+    emb = EmbeddingService(settings)
+    await emb.initialize()
+    app.state.embeddings = emb
 
     # Start Gemini
     gemini = GeminiService(settings)
     await gemini.initialize()
 
     # Start RAG orchestrator
-    rag = RAGService(settings, pc, gemini)
+    rag = RAGService(settings, emb, gemini)
     app.state.rag = rag
 
     logger.info("Application started (env=%s)", settings.app_env)
@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     await gemini.close()
-    await pc.close()
+    await emb.close()
     await close_pool()
     logger.info("Application shut down")
 

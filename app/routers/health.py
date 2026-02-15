@@ -9,15 +9,15 @@ from app.db import queries as db
 from app.db.database import get_pool
 from app.middleware.auth import verify_api_key
 from app.models.schemas import HealthResponse, StatsResponse
-from app.services.pinecone_service import PineconeService
+from app.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["operational"])
 
 
-def _get_pinecone(request: Request) -> PineconeService:
-    return request.app.state.pinecone
+def _get_embeddings(request: Request) -> EmbeddingService:
+    return request.app.state.embeddings
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -36,16 +36,16 @@ async def health_check(request: Request):
         checks["postgres"] = "disconnected"
         all_healthy = False
 
-    # Pinecone
+    # Embeddings (DeepInfra)
     try:
-        pc: PineconeService = _get_pinecone(request)
-        if await pc.health_check():
-            checks["pinecone"] = "connected"
+        emb: EmbeddingService = _get_embeddings(request)
+        if await emb.health_check():
+            checks["embeddings"] = "connected"
         else:
-            checks["pinecone"] = "timeout"
+            checks["embeddings"] = "timeout"
             all_healthy = False
     except Exception:
-        checks["pinecone"] = "unavailable"
+        checks["embeddings"] = "unavailable"
         all_healthy = False
 
     # Gemini (basic check — just verify key is set)
@@ -67,7 +67,7 @@ async def health_check(request: Request):
 @router.get("/stats", response_model=StatsResponse, dependencies=[Depends(verify_api_key)])
 async def stats(request: Request):
     settings = get_settings()
-    pc: PineconeService = _get_pinecone(request)
+    emb: EmbeddingService = _get_embeddings(request)
 
     article_count = await db.get_article_count()
     last_synced = await db.get_last_synced()
@@ -77,7 +77,7 @@ async def stats(request: Request):
     pro_used = await db.quota_get("pro")
     flash_used = await db.quota_get("flash")
 
-    pinecone_stats = await pc.get_index_stats()
+    vector_stats = await emb.get_index_stats()
 
     # Next midnight UTC
     now = datetime.now(timezone.utc)
@@ -106,5 +106,5 @@ async def stats(request: Request):
                 "limit": None,
             },
         },
-        pinecone=pinecone_stats,
+        vectors=vector_stats,
     )

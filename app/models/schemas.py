@@ -113,7 +113,7 @@ class StatsResponse(BaseModel):
     articles: dict
     queries: dict
     quota: dict
-    pinecone: dict
+    vectors: dict
 
 
 # ── Error schemas ────────────────────────────────────────────

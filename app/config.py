@@ -15,11 +15,9 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql://user:pass@localhost:5432/evropuvefur"
 
-    # Pinecone
-    pinecone_api_key: str = ""
-    pinecone_index_name: str = "evropuvefur"
-    pinecone_cloud: str = "aws"
-    pinecone_region: str = "eu-west-1"
+    # DeepInfra Embeddings
+    deepinfra_api_key: str = ""
+    deepinfra_model: str = "intfloat/multilingual-e5-large"
 
     # Gemini
     gemini_api_key: str = ""

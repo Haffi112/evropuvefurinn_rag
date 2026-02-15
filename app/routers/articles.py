@@ -15,15 +15,15 @@ from app.models.schemas import (
     BulkUpsertResponse,
     DeleteResponse,
 )
-from app.services.pinecone_service import PineconeService
+from app.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["articles"])
 
 
-def _get_pinecone(request: Request) -> PineconeService:
-    return request.app.state.pinecone
+def _get_embeddings(request: Request) -> EmbeddingService:
+    return request.app.state.embeddings
 
 
 # ── POST /articles/bulk  (defined before /{article_id}) ─────
@@ -31,7 +31,7 @@ def _get_pinecone(request: Request) -> PineconeService:
 @router.post("/articles/bulk", response_model=BulkUpsertResponse, dependencies=[Depends(verify_api_key)])
 @limiter.limit("100/minute")
 async def bulk_upsert_articles(request: Request, body: BulkUpsertRequest):
-    pc = _get_pinecone(request)
+    emb = _get_embeddings(request)
     created = updated = failed = 0
     errors: list[dict] = []
 
@@ -39,7 +39,7 @@ async def bulk_upsert_articles(request: Request, body: BulkUpsertRequest):
         try:
             article_dict = article.model_dump()
             row, was_created = await db.upsert_article(article_dict)
-            await pc.upsert_article(article_dict)
+            await emb.upsert_article(article_dict)
             if was_created:
                 created += 1
             else:
@@ -64,14 +64,14 @@ async def bulk_upsert_articles(request: Request, body: BulkUpsertRequest):
 @router.post("/articles", response_model=ArticleResponse, status_code=201, dependencies=[Depends(verify_api_key)])
 @limiter.limit("100/minute")
 async def create_article(request: Request, article: ArticleCreate):
-    pc = _get_pinecone(request)
+    emb = _get_embeddings(request)
 
     if await db.article_exists(article.id):
         raise HTTPException(status_code=409, detail=f"Article {article.id} already exists. Use PUT to update.")
 
     article_dict = article.model_dump()
     row = await db.insert_article(article_dict)
-    await pc.upsert_article(article_dict)
+    await emb.upsert_article(article_dict)
 
     return ArticleResponse(
         id=row["id"],
@@ -87,14 +87,14 @@ async def create_article(request: Request, article: ArticleCreate):
 @router.put("/articles/{article_id}", response_model=ArticleResponse, dependencies=[Depends(verify_api_key)])
 @limiter.limit("100/minute")
 async def update_article(request: Request, article_id: str, article: ArticleCreate):
-    pc = _get_pinecone(request)
+    emb = _get_embeddings(request)
 
     if not await db.article_exists(article_id):
         raise HTTPException(status_code=404, detail=f"Article {article_id} not found")
 
     article_dict = article.model_dump()
     row = await db.update_article(article_id, article_dict)
-    await pc.upsert_article({**article_dict, "id": article_id})
+    await emb.upsert_article({**article_dict, "id": article_id})
     await db.cache_invalidate_by_article(article_id)
 
     return ArticleResponse(
@@ -111,13 +111,10 @@ async def update_article(request: Request, article_id: str, article: ArticleCrea
 @router.delete("/articles/{article_id}", response_model=DeleteResponse, dependencies=[Depends(verify_api_key)])
 @limiter.limit("100/minute")
 async def delete_article(request: Request, article_id: str):
-    pc = _get_pinecone(request)
-
     if not await db.article_exists(article_id):
         raise HTTPException(status_code=404, detail=f"Article {article_id} not found")
 
     await db.delete_article(article_id)
-    await pc.delete_vector(article_id)
     await db.cache_invalidate_by_article(article_id)
 
     return DeleteResponse(id=article_id, deleted_at=datetime.now(timezone.utc))

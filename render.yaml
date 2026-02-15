@@ -13,10 +13,8 @@ services:
         fromDatabase:
           name: evropuvefur-db
           property: connectionString
-      - key: PINECONE_API_KEY
+      - key: DEEPINFRA_API_KEY
         sync: false
-      - key: PINECONE_INDEX_NAME
-        value: evropuvefur
       - key: GEMINI_API_KEY
         sync: false
       - key: CMS_API_KEY
