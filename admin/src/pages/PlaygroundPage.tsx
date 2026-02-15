@@ -1,5 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { ExternalLink, Loader2, Send } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { getApiKey } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -30,11 +32,16 @@ export default function PlaygroundPage() {
   const [meta, setMeta] = useState<Record<string, unknown>>({});
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
+  const [thinking, setThinking] = useState("");
+  const [scoreThreshold, setScoreThreshold] = useState<number | null>(null);
+  const [maxArticles, setMaxArticles] = useState(5);
+  const [showThinking, setShowThinking] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const handleSubmit = useCallback(async () => {
     if (!query.trim() || loading) return;
     setAnswer("");
+    setThinking("");
     setRefs([]);
     setMeta({});
     setStatus("");
@@ -52,7 +59,7 @@ export default function PlaygroundPage() {
             "Content-Type": "application/json",
             "X-API-Key": getApiKey() ?? "",
           },
-          body: JSON.stringify({ query, stream: true, language }),
+          body: JSON.stringify({ query, stream: true, language, top_k: maxArticles, score_threshold: scoreThreshold, include_thinking: showThinking }),
           signal: controller.signal,
         });
 
@@ -95,7 +102,7 @@ export default function PlaygroundPage() {
             "Content-Type": "application/json",
             "X-API-Key": getApiKey() ?? "",
           },
-          body: JSON.stringify({ query, stream: false, language }),
+          body: JSON.stringify({ query, stream: false, language, top_k: maxArticles, score_threshold: scoreThreshold, include_thinking: showThinking }),
           signal: controller.signal,
         });
         const data = await res.json();
@@ -116,12 +123,15 @@ export default function PlaygroundPage() {
       setLoading(false);
       abortRef.current = null;
     }
-  }, [query, language, streaming, loading]);
+  }, [query, language, streaming, loading, maxArticles, scoreThreshold, showThinking]);
 
   function handleSSEEvent(event: string, data: Record<string, unknown>) {
     switch (event) {
       case "status":
         setStatus(data.message as string);
+        break;
+      case "thinking":
+        setThinking((prev) => prev + (data.text as string));
         break;
       case "token":
         setAnswer((prev) => prev + (data.text as string));
@@ -193,6 +203,58 @@ export default function PlaygroundPage() {
               </Button>
             )}
           </div>
+          <div className="flex flex-wrap items-center gap-4 border-t pt-3">
+            <label className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Threshold:</span>
+              <input
+                type="checkbox"
+                checked={scoreThreshold === null}
+                onChange={(e) =>
+                  setScoreThreshold(e.target.checked ? null : 0.5)
+                }
+                className="rounded"
+              />
+              <span className="text-xs text-muted-foreground">Default</span>
+              {scoreThreshold !== null && (
+                <>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={scoreThreshold}
+                    onChange={(e) =>
+                      setScoreThreshold(parseFloat(e.target.value))
+                    }
+                    className="w-24"
+                  />
+                  <span className="w-8 text-xs tabular-nums">
+                    {scoreThreshold.toFixed(2)}
+                  </span>
+                </>
+              )}
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Max articles:</span>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={maxArticles}
+                onChange={(e) => setMaxArticles(Number(e.target.value))}
+                className="w-16 rounded border px-2 py-0.5 text-sm"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={showThinking}
+                onChange={(e) => setShowThinking(e.target.checked)}
+                className="rounded"
+              />
+              Include thinking
+            </label>
+          </div>
         </CardContent>
       </Card>
 
@@ -202,6 +264,18 @@ export default function PlaygroundPage() {
           {loading && <Loader2 className="h-4 w-4 animate-spin" />}
           <span>{status || "Processing..."}</span>
         </div>
+      )}
+
+      {/* Thinking trace */}
+      {thinking && (
+        <details className="rounded-lg border bg-muted/50 p-4">
+          <summary className="cursor-pointer text-sm font-medium">
+            Thinking trace ({thinking.length} chars)
+          </summary>
+          <pre className="mt-2 whitespace-pre-wrap text-xs text-muted-foreground">
+            {thinking}
+          </pre>
+        </details>
       )}
 
       {/* Answer */}
@@ -220,7 +294,11 @@ export default function PlaygroundPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="whitespace-pre-wrap">{answer}</p>
+            <div className="prose prose-sm max-w-none dark:prose-invert">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {answer}
+              </ReactMarkdown>
+            </div>
           </CardContent>
         </Card>
       )}

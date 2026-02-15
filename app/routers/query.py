@@ -29,11 +29,15 @@ async def query_endpoint(request: Request, body: QueryRequest):
             rag.process_query_stream(
                 body.query, body.top_k, body.language,
                 ip_address=ip_address, start_time=start_time,
+                score_threshold=body.score_threshold,
+                include_thinking=body.include_thinking,
             )
         )
 
     response = await rag.process_query_json(
         body.query, body.top_k, body.language,
         ip_address=ip_address, start_time=start_time,
+        score_threshold=body.score_threshold,
+        include_thinking=body.include_thinking,
     )
     return response

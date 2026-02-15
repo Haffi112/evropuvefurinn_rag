@@ -83,8 +83,11 @@ class GeminiService:
             lang_instruction = "\n\nMIKILVÆGT: Spurning notandans er á íslensku. Svaraðu á íslensku."
         return f"## Greinar úr þekkingargrunni\n\n{context}{lang_instruction}"
 
-    async def generate_stream(self, query: str, articles: list[dict], language: str = "auto"):
-        """Returns (model_used, async_iterator_of_text_chunks)."""
+    async def generate_stream(
+        self, query: str, articles: list[dict], language: str = "auto",
+        include_thinking: bool = False,
+    ):
+        """Returns (model_used, async_iterator_of_(type, text)_tuples)."""
         model = await self.select_model()
         context = self._build_context(articles, language)
 
@@ -94,24 +97,38 @@ class GeminiService:
 
         user_content = f"{context}\n\n## Spurning notanda\n{query}"
 
+        config = types.GenerateContentConfig(
+            system_instruction=self._system_prompt,
+            temperature=0.3,
+        )
+        if include_thinking:
+            config.thinking_config = types.ThinkingConfig(
+                thinking_budget=4096,
+            )
+
         stream = await self._client.aio.models.generate_content_stream(
             model=model,
             contents=user_content,
-            config=types.GenerateContentConfig(
-                system_instruction=self._system_prompt,
-                temperature=0.3,
-            ),
+            config=config,
         )
 
         async def text_iterator():
             async for chunk in stream:
-                if chunk.text:
-                    yield chunk.text
+                if not chunk.candidates:
+                    continue
+                for part in chunk.candidates[0].content.parts:
+                    if part.thought:
+                        yield ("thinking", part.text)
+                    elif part.text:
+                        yield ("answer", part.text)
 
         return model, text_iterator()
 
-    async def generate_non_streaming(self, query: str, articles: list[dict], language: str = "auto") -> tuple[str, str]:
-        """Returns (model_used, full_text)."""
+    async def generate_non_streaming(
+        self, query: str, articles: list[dict], language: str = "auto",
+        include_thinking: bool = False,
+    ) -> tuple[str, str, str | None]:
+        """Returns (model_used, answer_text, thinking_text_or_None)."""
         model = await self.select_model()
         context = self._build_context(articles, language)
 
@@ -120,12 +137,29 @@ class GeminiService:
 
         user_content = f"{context}\n\n## Spurning notanda\n{query}"
 
+        config = types.GenerateContentConfig(
+            system_instruction=self._system_prompt,
+            temperature=0.3,
+        )
+        if include_thinking:
+            config.thinking_config = types.ThinkingConfig(
+                thinking_budget=4096,
+            )
+
         response = await self._client.aio.models.generate_content(
             model=model,
             contents=user_content,
-            config=types.GenerateContentConfig(
-                system_instruction=self._system_prompt,
-                temperature=0.3,
-            ),
+            config=config,
         )
-        return model, response.text
+
+        if not include_thinking:
+            return model, response.text, None
+
+        thinking_parts: list[str] = []
+        answer_parts: list[str] = []
+        for part in response.candidates[0].content.parts:
+            if part.thought:
+                thinking_parts.append(part.text)
+            elif part.text:
+                answer_parts.append(part.text)
+        return model, "".join(answer_parts), "".join(thinking_parts) or None

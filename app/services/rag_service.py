@@ -56,17 +56,20 @@ class RAGService:
     async def process_query_json(
         self, query: str, top_k: int, language: str,
         ip_address: str | None = None, start_time: float | None = None,
+        score_threshold: float | None = None, include_thinking: bool = False,
     ) -> QueryResponse:
         query_id = f"q_{uuid.uuid4().hex[:12]}"
         qhash = _query_hash(query)
+        threshold = score_threshold if score_threshold is not None else self._settings.rag_score_threshold
 
-        # Cache check
-        cached = await db.cache_get(qhash)
-        if cached:
-            resp = QueryResponse(**cached, cached=True, query_id=query_id)
-            await self._log_query(query, cached.get("answer"), cached.get("model_used"),
-                                  cached.get("references", []), False, True, start_time, ip_address)
-            return resp
+        # Cache check (skip when thinking — it's a debug tool)
+        if not include_thinking:
+            cached = await db.cache_get(qhash)
+            if cached:
+                resp = QueryResponse(**cached, cached=True, query_id=query_id)
+                await self._log_query(query, cached.get("answer"), cached.get("model_used"),
+                                      cached.get("references", []), False, True, start_time, ip_address)
+                return resp
 
         # Scope guard
         scope = await self._gemini.check_scope(query)
@@ -83,7 +86,7 @@ class RAGService:
 
         # Vector search
         matches = await self._embeddings.query(query, top_k=top_k)
-        article_ids = [m["id"] for m in matches if m["score"] >= self._settings.rag_score_threshold]
+        article_ids = [m["id"] for m in matches if m["score"] >= threshold]
         if not article_ids:
             no_result = ("Engar greinar fundust í þekkingargrunni sem tengjast þessari spurningu."
                          if language != "en"
@@ -111,24 +114,26 @@ class RAGService:
         ]
 
         # Generate answer
-        model_used, answer_text = await self._gemini.generate_non_streaming(query, articles, language)
+        model_used, answer_text, thinking_text = await self._gemini.generate_non_streaming(
+            query, articles, language, include_thinking=include_thinking,
+        )
 
         response = QueryResponse(
             query=query, answer=answer_text, references=references,
             model_used=model_used, cached=False, query_id=query_id,
         )
 
-        # Store in cache
-        cache_data = response.model_dump()
-        cache_data.pop("cached", None)
-        cache_data.pop("query_id", None)
-        # Convert Reference objects and datetimes to serialisable form
-        refs_dicts = [r.model_dump() for r in references]
-        cache_data["references"] = refs_dicts
-        await db.cache_store(qhash, query, cache_data, article_ids, self._settings.query_cache_ttl_hours)
+        # Store in cache (skip when thinking)
+        if not include_thinking:
+            cache_data = response.model_dump()
+            cache_data.pop("cached", None)
+            cache_data.pop("query_id", None)
+            refs_dicts = [r.model_dump() for r in references]
+            cache_data["references"] = refs_dicts
+            await db.cache_store(qhash, query, cache_data, article_ids, self._settings.query_cache_ttl_hours)
 
         await self._log_query(query, answer_text, model_used,
-                              refs_dicts, False, False, start_time, ip_address)
+                              [r.model_dump() for r in references], False, False, start_time, ip_address)
         return response
 
     # ── SSE (streaming) mode ─────────────────────────────────
@@ -136,29 +141,31 @@ class RAGService:
     async def process_query_stream(
         self, query: str, top_k: int, language: str,
         ip_address: str | None = None, start_time: float | None = None,
+        score_threshold: float | None = None, include_thinking: bool = False,
     ):
         """Yields dicts with 'event' and 'data' keys for sse-starlette."""
         query_id = f"q_{uuid.uuid4().hex[:12]}"
         qhash = _query_hash(query)
+        threshold = score_threshold if score_threshold is not None else self._settings.rag_score_threshold
 
-        # Cache check
-        cached = await db.cache_get(qhash)
-        if cached:
-            # Replay cached answer as fast stream
-            yield {"event": "status", "data": json.dumps({"stage": "complete", "message": "Cached response"})}
-            for word in cached.get("answer", "").split():
-                yield {"event": "token", "data": json.dumps({"text": word + " "})}
-            yield {"event": "references", "data": json.dumps({"references": cached.get("references", [])})}
-            yield {
-                "event": "done",
-                "data": json.dumps({
-                    "model_used": cached.get("model_used", "cache"),
-                    "cached": True, "query_id": query_id,
-                }),
-            }
-            await self._log_query(query, cached.get("answer"), cached.get("model_used"),
-                                  cached.get("references", []), False, True, start_time, ip_address)
-            return
+        # Cache check (skip when thinking — it's a debug tool)
+        if not include_thinking:
+            cached = await db.cache_get(qhash)
+            if cached:
+                yield {"event": "status", "data": json.dumps({"stage": "complete", "message": "Cached response"})}
+                for word in cached.get("answer", "").split():
+                    yield {"event": "token", "data": json.dumps({"text": word + " "})}
+                yield {"event": "references", "data": json.dumps({"references": cached.get("references", [])})}
+                yield {
+                    "event": "done",
+                    "data": json.dumps({
+                        "model_used": cached.get("model_used", "cache"),
+                        "cached": True, "query_id": query_id,
+                    }),
+                }
+                await self._log_query(query, cached.get("answer"), cached.get("model_used"),
+                                      cached.get("references", []), False, True, start_time, ip_address)
+                return
 
         # Status: searching
         yield {"event": "status", "data": json.dumps({"stage": "searching", "message": "Leita í þekkingargrunni..."})}
@@ -183,7 +190,7 @@ class RAGService:
 
         # Vector search
         matches = await self._embeddings.query(query, top_k=top_k)
-        article_ids = [m["id"] for m in matches if m["score"] >= self._settings.rag_score_threshold]
+        article_ids = [m["id"] for m in matches if m["score"] >= threshold]
 
         top_score = matches[0]["score"] if matches else 0.0
         yield {
@@ -213,11 +220,16 @@ class RAGService:
         yield {"event": "status", "data": json.dumps({"stage": "generating", "message": "Bý til svar..."})}
 
         # Stream LLM response
-        model_used, token_stream = await self._gemini.generate_stream(query, articles, language)
+        model_used, token_stream = await self._gemini.generate_stream(
+            query, articles, language, include_thinking=include_thinking,
+        )
         full_answer = []
-        async for chunk in token_stream:
-            full_answer.append(chunk)
-            yield {"event": "token", "data": json.dumps({"text": chunk})}
+        async for chunk_type, chunk_text in token_stream:
+            if chunk_type == "thinking":
+                yield {"event": "thinking", "data": json.dumps({"text": chunk_text})}
+            else:
+                full_answer.append(chunk_text)
+                yield {"event": "token", "data": json.dumps({"text": chunk_text})}
 
         # References
         references = [
@@ -235,12 +247,13 @@ class RAGService:
             "data": json.dumps({"model_used": model_used, "cached": False, "query_id": query_id}),
         }
 
-        # Store in cache (fire-and-forget style, but within same coroutine)
+        # Store in cache (skip when thinking)
         answer_text = "".join(full_answer)
-        cache_data = {
-            "query": query, "answer": answer_text, "references": references,
-            "model_used": model_used,
-        }
-        await db.cache_store(qhash, query, cache_data, article_ids, self._settings.query_cache_ttl_hours)
+        if not include_thinking:
+            cache_data = {
+                "query": query, "answer": answer_text, "references": references,
+                "model_used": model_used,
+            }
+            await db.cache_store(qhash, query, cache_data, article_ids, self._settings.query_cache_ttl_hours)
         await self._log_query(query, answer_text, model_used,
                               references, False, False, start_time, ip_address)

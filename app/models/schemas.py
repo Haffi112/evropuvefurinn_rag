@@ -79,8 +79,10 @@ class DeleteResponse(BaseModel):
 class QueryRequest(BaseModel):
     query: str = Field(..., max_length=1000)
     stream: bool = True
-    top_k: int = Field(default=5, ge=1, le=10)
+    top_k: int = Field(default=5, ge=1, le=20)
     language: str = "auto"
+    score_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    include_thinking: bool = False
 
 
 class Reference(BaseModel):
