@@ -103,20 +103,22 @@ class RAGService:
         # Fetch full articles
         articles = await db.get_articles_by_ids(article_ids)
 
-        # Build references with scores
+        # Generate answer (structured output returns references_used)
         score_map = {m["id"]: m["score"] for m in matches}
+        model_used, answer_text, thinking_text, references_used = await self._gemini.generate_non_streaming(
+            query, articles, language, include_thinking=include_thinking,
+        )
+
+        # Build references only from articles the model actually cited
+        used_ids = set(references_used)
         references = [
             Reference(
                 id=a["id"], title=a["title"], source_url=a["source_url"],
                 date=a["date"], relevance_score=round(score_map.get(a["id"], 0), 4),
             )
             for a in articles
+            if a["id"] in used_ids
         ]
-
-        # Generate answer
-        model_used, answer_text, thinking_text = await self._gemini.generate_non_streaming(
-            query, articles, language, include_thinking=include_thinking,
-        )
 
         response = QueryResponse(
             query=query, answer=answer_text, references=references,
@@ -224,20 +226,24 @@ class RAGService:
             query, articles, language, include_thinking=include_thinking,
         )
         full_answer = []
+        used_ids: set[str] = set()
         async for chunk_type, chunk_text in token_stream:
             if chunk_type == "thinking":
                 yield {"event": "thinking", "data": json.dumps({"text": chunk_text})}
+            elif chunk_type == "references":
+                used_ids = set(chunk_text)  # chunk_text is a list of IDs
             else:
                 full_answer.append(chunk_text)
                 yield {"event": "token", "data": json.dumps({"text": chunk_text})}
 
-        # References
+        # Build references only from articles the model actually cited
         references = [
             {
                 "id": a["id"], "title": a["title"], "source_url": a["source_url"],
                 "date": a["date"], "relevance_score": round(score_map.get(a["id"], 0), 4),
             }
             for a in articles
+            if a["id"] in used_ids
         ]
         yield {"event": "references", "data": json.dumps({"references": references})}
 

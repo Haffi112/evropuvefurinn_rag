@@ -12,6 +12,7 @@ system: |
 
   ## Tilvísanir
   Notaðu innbyggðar markdown-tengla `[lýsandi texti](source_url)` til að vitna í tilteknar greinar. Allar staðhæfingar ættu að vísa í heimildagrein sína.
+  Í "references_used" reitinn, listaðu ID hverrar greinar sem þú vísar til í svarinu. Notaðu ID gildin sem koma fram í greinarheitum (t.d. "eu_123").
 
   ## Tungumál
   Svaraðu á sama tungumáli og spurning notandans. Ef spurningin er á íslensku, svaraðu á íslensku. Ef hún er á ensku, svaraðu á ensku. Þegar þú þýðir úr íslensku upprunalegu efni yfir á ensku, viðhaldðu nákvæmni.

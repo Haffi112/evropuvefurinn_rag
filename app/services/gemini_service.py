@@ -1,9 +1,11 @@
+import json
 import logging
 from pathlib import Path
 
 import yaml
 from google import genai
 from google.genai import types
+from pydantic import BaseModel
 
 from app.config import Settings
 from app.db import queries as db
@@ -11,6 +13,11 @@ from app.db import queries as db
 logger = logging.getLogger(__name__)
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
+
+
+class GeminiResponse(BaseModel):
+    answer: str  # Markdown-formatted answer
+    references_used: list[str]  # Article IDs the model actually cited
 
 
 class GeminiService:
@@ -69,7 +76,7 @@ class GeminiService:
         parts = []
         for i, a in enumerate(articles, 1):
             parts.append(
-                f"[Grein {i}]\n"
+                f"[Grein {i} | ID: {a['id']}]\n"
                 f"Titill: {a['title']}\n"
                 f"Spurning: {a['question']}\n"
                 f"Heimild: {a['source_url']}\n"
@@ -87,7 +94,8 @@ class GeminiService:
         self, query: str, articles: list[dict], language: str = "auto",
         include_thinking: bool = False,
     ):
-        """Returns (model_used, async_iterator_of_(type, text)_tuples)."""
+        """Returns (model_used, async_iterator) where iterator yields
+        ("thinking", text), ("answer", text), or ("references", list[str])."""
         model = await self.select_model()
         context = self._build_context(articles, language)
 
@@ -100,10 +108,13 @@ class GeminiService:
         config = types.GenerateContentConfig(
             system_instruction=self._system_prompt,
             temperature=0.3,
+            response_mime_type="application/json",
+            response_schema=GeminiResponse,
         )
         if include_thinking:
             config.thinking_config = types.ThinkingConfig(
                 thinking_budget=4096,
+                include_thoughts=True,
             )
 
         stream = await self._client.aio.models.generate_content_stream(
@@ -113,22 +124,94 @@ class GeminiService:
         )
 
         async def text_iterator():
+            json_buffer = []  # accumulate full JSON for final parse
+            # State machine for incremental answer extraction
+            # States: "before" → waiting for "answer":" prefix
+            #         "in_answer" → inside the answer string value
+            #         "after" → past the answer string, accumulating rest
+            state = "before"
+            escape = False  # next char is escaped
+
             async for chunk in stream:
                 if not chunk.candidates:
                     continue
                 for part in chunk.candidates[0].content.parts:
                     if part.thought:
                         yield ("thinking", part.text)
-                    elif part.text:
-                        yield ("answer", part.text)
+                        continue
+                    if not part.text:
+                        continue
+
+                    json_buffer.append(part.text)
+
+                    if state == "before":
+                        # Check if we've accumulated enough to find "answer":"
+                        joined = "".join(json_buffer)
+                        marker = '"answer":"'
+                        idx = joined.find(marker)
+                        if idx != -1:
+                            state = "in_answer"
+                            # Anything after the marker is answer content
+                            after_marker = joined[idx + len(marker):]
+                            # Process this initial chunk through the answer parser
+                            decoded = []
+                            for ch in after_marker:
+                                if escape:
+                                    if ch == "n":
+                                        decoded.append("\n")
+                                    elif ch == "t":
+                                        decoded.append("\t")
+                                    else:
+                                        decoded.append(ch)  # \", \\, etc.
+                                    escape = False
+                                elif ch == "\\":
+                                    escape = True
+                                elif ch == '"':
+                                    state = "after"
+                                    break
+                                else:
+                                    decoded.append(ch)
+                            if decoded:
+                                yield ("answer", "".join(decoded))
+                    elif state == "in_answer":
+                        decoded = []
+                        for ch in part.text:
+                            if escape:
+                                if ch == "n":
+                                    decoded.append("\n")
+                                elif ch == "t":
+                                    decoded.append("\t")
+                                else:
+                                    decoded.append(ch)
+                                escape = False
+                            elif ch == "\\":
+                                escape = True
+                            elif ch == '"':
+                                state = "after"
+                                break
+                            else:
+                                decoded.append(ch)
+                        if decoded:
+                            yield ("answer", "".join(decoded))
+                    # state == "after": just accumulate, parsed at end
+
+            # Parse complete JSON to extract references_used
+            full_json = "".join(json_buffer)
+            try:
+                parsed = json.loads(full_json)
+                refs = parsed.get("references_used", [])
+            except (json.JSONDecodeError, KeyError):
+                logger.warning("Failed to parse structured response JSON")
+                refs = []
+            yield ("references", refs)
 
         return model, text_iterator()
 
     async def generate_non_streaming(
         self, query: str, articles: list[dict], language: str = "auto",
         include_thinking: bool = False,
-    ) -> tuple[str, str, str | None]:
-        """Returns (model_used, answer_text, thinking_text_or_None)."""
+    ) -> tuple[str, str, str | None, list[str]]:
+        """Returns (model_used, answer_text, thinking_text_or_None, references_used)."""
         model = await self.select_model()
         context = self._build_context(articles, language)
 
@@ -140,10 +223,13 @@ class GeminiService:
         config = types.GenerateContentConfig(
             system_instruction=self._system_prompt,
             temperature=0.3,
+            response_mime_type="application/json",
+            response_schema=GeminiResponse,
         )
         if include_thinking:
             config.thinking_config = types.ThinkingConfig(
                 thinking_budget=4096,
+                include_thoughts=True,
             )
 
         response = await self._client.aio.models.generate_content(
@@ -152,14 +238,30 @@ class GeminiService:
             config=config,
         )
 
-        if not include_thinking:
-            return model, response.text, None
+        # Extract thinking parts if requested
+        thinking_text: str | None = None
+        raw_json = ""
+        if include_thinking:
+            thinking_parts: list[str] = []
+            json_parts: list[str] = []
+            for part in response.candidates[0].content.parts:
+                if part.thought:
+                    thinking_parts.append(part.text)
+                elif part.text:
+                    json_parts.append(part.text)
+            thinking_text = "".join(thinking_parts) or None
+            raw_json = "".join(json_parts)
+        else:
+            raw_json = response.text
 
-        thinking_parts: list[str] = []
-        answer_parts: list[str] = []
-        for part in response.candidates[0].content.parts:
-            if part.thought:
-                thinking_parts.append(part.text)
-            elif part.text:
-                answer_parts.append(part.text)
-        return model, "".join(answer_parts), "".join(thinking_parts) or None
+        # Parse structured JSON response
+        try:
+            parsed = json.loads(raw_json)
+            answer_text = parsed.get("answer", raw_json)
+            refs = parsed.get("references_used", [])
+        except (json.JSONDecodeError, KeyError):
+            logger.warning("Failed to parse structured response JSON, using raw text")
+            answer_text = raw_json
+            refs = []
+
+        return model, answer_text, thinking_text, refs
