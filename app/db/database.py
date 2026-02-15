@@ -74,6 +74,13 @@ async def _init_connection(conn: asyncpg.Connection) -> None:
 
 async def init_pool(database_url: str) -> asyncpg.Pool:
     global _pool
+    # Ensure pgvector extension exists before pool init registers the type
+    conn = await asyncpg.connect(database_url)
+    try:
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    finally:
+        await conn.close()
+
     _pool = await asyncpg.create_pool(
         database_url, min_size=2, max_size=10, init=_init_connection,
     )
