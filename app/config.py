@@ -21,8 +21,8 @@ class Settings(BaseSettings):
 
     # Gemini
     gemini_api_key: str = ""
-    gemini_pro_model: str = "gemini-3-pro"
-    gemini_flash_model: str = "gemini-3-flash"
+    gemini_pro_model: str = "gemini-3-pro-preview"
+    gemini_flash_model: str = "gemini-3-flash-preview"
     gemini_pro_daily_limit: int = 200
 
     # CORS

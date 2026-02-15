@@ -153,8 +153,8 @@ Full reference (see `.env.template`):
 | `PINECONE_CLOUD`       | `aws`                      | Pinecone cloud provider                  |
 | `PINECONE_REGION`      | `eu-west-1`                | Pinecone region                          |
 | `GEMINI_API_KEY`       |                            | Google AI Studio API key                 |
-| `GEMINI_PRO_MODEL`     | `gemini-3-pro`             | Model for complex queries                |
-| `GEMINI_FLASH_MODEL`   | `gemini-3-flash`           | Model for simple queries                 |
+| `GEMINI_PRO_MODEL`     | `gemini-3-pro-preview`     | Model for complex queries                |
+| `GEMINI_FLASH_MODEL`   | `gemini-3-flash-preview`   | Model for simple queries                 |
 | `GEMINI_PRO_DAILY_LIMIT`| `200`                    | Daily Pro model request cap              |
 | `CORS_ALLOWED_ORIGINS` | `https://www.evropuvefur.is,...` | Comma-separated allowed origins    |
 | `QUERY_RATE_LIMIT`     | `10/minute`                | Rate limit for /query                    |
