@@ -20,7 +20,13 @@ def _get_embeddings(request: Request) -> EmbeddingService:
     return request.app.state.embeddings
 
 
-@router.get("/health", response_model=HealthResponse)
+@router.get(
+    "/health",
+    response_model=HealthResponse,
+    summary="Health check",
+    description="Returns the status of each backing service (Postgres, embeddings, "
+    "Gemini). Returns 200 if all healthy, 503 if any service is degraded.",
+)
 async def health_check(request: Request):
     settings = get_settings()
     checks = {}
@@ -64,7 +70,14 @@ async def health_check(request: Request):
     )
 
 
-@router.get("/stats", response_model=StatsResponse, dependencies=[Depends(verify_api_key)])
+@router.get(
+    "/stats",
+    response_model=StatsResponse,
+    dependencies=[Depends(verify_api_key)],
+    summary="Usage statistics",
+    description="Returns article counts, today's query volume, cache hit rate, "
+    "Gemini quota usage (Pro/Flash), and vector index statistics.",
+)
 async def stats(request: Request):
     settings = get_settings()
     emb: EmbeddingService = _get_embeddings(request)

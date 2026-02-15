@@ -17,7 +17,14 @@ router = APIRouter(
 )
 
 
-@router.get("/query-log", response_model=QueryLogListResponse)
+@router.get(
+    "/query-log",
+    response_model=QueryLogListResponse,
+    summary="List query logs",
+    description="Paginated, filterable log of all queries made to the API. "
+    "Supports filtering by date range, model, cache status, scope-declined "
+    "flag, and free-text search over query content.",
+)
 async def list_query_logs(
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=1, le=200),
@@ -49,7 +56,13 @@ async def list_query_logs(
     )
 
 
-@router.get("/query-log/stats", response_model=QueryLogStatsResponse)
+@router.get(
+    "/query-log/stats",
+    response_model=QueryLogStatsResponse,
+    summary="Query log statistics",
+    description="Aggregate statistics: total queries, today's count, cache hit count, "
+    "scope-declined count, and average latency.",
+)
 async def query_log_stats():
     stats = await db.get_query_log_stats()
     return QueryLogStatsResponse(**stats)

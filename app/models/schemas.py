@@ -1,29 +1,45 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ── Article schemas ──────────────────────────────────────────
 
 class ArticleCreate(BaseModel):
-    id: str
-    title: str
-    question: str
-    answer: str
-    source_url: str
-    date: str
-    author: str
-    categories: list[str] = Field(default_factory=list)
-    tags: list[str] = Field(default_factory=list)
+    id: str = Field(description="Unique slug-style identifier for the article.")
+    title: str = Field(description="Human-readable article title.")
+    question: str = Field(description="The question this article answers.")
+    answer: str = Field(description="Full answer text (HTML or plain text).")
+    source_url: str = Field(description="Canonical URL where the article is published.")
+    date: str = Field(description="Publication date as YYYY-MM-DD string.")
+    author: str = Field(description="Author or publishing organization.")
+    categories: list[str] = Field(default_factory=list, description="Topic categories.")
+    tags: list[str] = Field(default_factory=list, description="Free-form tags.")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "id": "hvad-er-esb",
+                "title": "Hvað er Evrópusambandið?",
+                "question": "Hvað er Evrópusambandið og hvert er hlutverk þess?",
+                "answer": "Evrópusambandið (ESB) er efnahagslegt og pólitískt samband 27 Evrópuríkja...",
+                "source_url": "https://evropuvefur.is/hvad-er-esb",
+                "date": "2025-03-15",
+                "author": "Evrópuvefurinn",
+                "categories": ["Grunnupplýsingar", "ESB"],
+                "tags": ["esb", "stofnanir"],
+            }
+        }
+    )
 
 
 class ArticleResponse(BaseModel):
-    id: str
-    title: str
-    source_url: str
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-    vector_indexed: bool = True
+    id: str = Field(description="Article identifier.")
+    title: str = Field(description="Article title.")
+    source_url: str = Field(description="Canonical URL.")
+    created_at: datetime | None = Field(default=None, description="When the article was first created.")
+    updated_at: datetime | None = Field(default=None, description="When the article was last updated.")
+    vector_indexed: bool = Field(default=True, description="Whether the embedding vector was stored.")
 
 
 class ArticleFull(BaseModel):
@@ -57,7 +73,7 @@ class ArticleListResponse(BaseModel):
 
 
 class BulkUpsertRequest(BaseModel):
-    articles: list[ArticleCreate] = Field(..., max_length=100)
+    articles: list[ArticleCreate] = Field(..., max_length=100, description="List of articles to create or update (max 100).")
 
 
 class BulkUpsertResponse(BaseModel):
@@ -77,38 +93,49 @@ class DeleteResponse(BaseModel):
 # ── Query schemas ────────────────────────────────────────────
 
 class QueryRequest(BaseModel):
-    query: str = Field(..., max_length=1000)
-    stream: bool = True
-    top_k: int = Field(default=5, ge=1, le=20)
-    language: str = "auto"
-    score_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
-    include_thinking: bool = False
+    query: str = Field(..., max_length=1000, description="The question to ask, in Icelandic or English.")
+    stream: bool = Field(default=True, description="If true, return Server-Sent Events; if false, return JSON.")
+    top_k: int = Field(default=5, ge=1, le=20, description="Number of source articles to retrieve (1–20).")
+    language: str = Field(default="auto", description="Response language: 'is', 'en', or 'auto' (detect from query).")
+    score_threshold: float | None = Field(default=None, ge=0.0, le=1.0, description="Minimum relevance score to include a source (0.0–1.0). Omit to use the server default.")
+    include_thinking: bool = Field(default=False, description="If true, include the model's chain-of-thought reasoning in the response.")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "Hvað er Schengen-samkomulagið?",
+                "stream": True,
+                "top_k": 5,
+                "language": "auto",
+            }
+        }
+    )
 
 
 class Reference(BaseModel):
-    id: str
-    title: str
-    source_url: str
-    date: str
-    relevance_score: float
+    id: str = Field(description="Article ID.")
+    title: str = Field(description="Article title.")
+    source_url: str = Field(description="Link to the original article.")
+    date: str = Field(description="Article publication date.")
+    relevance_score: float = Field(description="Cosine similarity score (0.0–1.0). Higher = more relevant.")
 
 
 class QueryResponse(BaseModel):
-    query: str
-    answer: str
-    references: list[Reference]
-    model_used: str
-    cached: bool = False
-    query_id: str
-    scope_declined: bool = False
+    query: str = Field(description="The original query text.")
+    answer: str = Field(description="AI-generated answer grounded in the retrieved articles.")
+    references: list[Reference] = Field(description="Source articles used to generate the answer, ranked by relevance.")
+    model_used: str = Field(description="Gemini model that generated the answer (e.g. 'gemini-3-pro').")
+    cached: bool = Field(default=False, description="Whether this answer was served from cache.")
+    query_id: str = Field(description="Unique identifier for this query (for logging/debugging).")
+    scope_declined: bool = Field(default=False, description="True if the query was outside the EU/Iceland scope and was declined.")
 
 
 # ── Operational schemas ──────────────────────────────────────
 
 class HealthResponse(BaseModel):
-    status: str
-    version: str
-    checks: dict[str, str]
+    status: str = Field(description="Overall status: 'healthy' or 'degraded'.")
+    version: str = Field(description="API version string.")
+    checks: dict[str, str] = Field(description="Per-service status (postgres, embeddings, gemini).")
 
 
 class StatsResponse(BaseModel):

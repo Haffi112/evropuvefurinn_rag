@@ -53,12 +53,64 @@ async def lifespan(app: FastAPI):
     logger.info("Application shut down")
 
 
+OPENAPI_TAGS = [
+    {
+        "name": "query",
+        "description": "RAG-powered question answering about the EU and Iceland's membership. "
+        "Supports both streaming (SSE) and JSON responses.",
+    },
+    {
+        "name": "articles",
+        "description": "CRUD operations for EU-related articles that form the knowledge base. "
+        "Write operations require an API key.",
+    },
+    {
+        "name": "operational",
+        "description": "Health checks and usage statistics for monitoring the API.",
+    },
+    {
+        "name": "admin",
+        "description": "Admin-only endpoints for query logs and analytics. Requires an API key.",
+    },
+]
+
+API_DESCRIPTION = """
+Evrópuvefurinn API provides **RAG-powered question answering** about the European Union
+and Iceland's relationship with it, backed by a curated knowledge base of ~670 articles.
+
+## Key features
+
+- **Semantic search** — queries are embedded with `multilingual-e5-large` via DeepInfra
+  and matched against article vectors stored in pgvector.
+- **AI-generated answers** — matched articles are passed to Google Gemini (Pro or Flash)
+  to produce grounded, referenced answers in Icelandic or English.
+- **Streaming** — the `/query` endpoint supports Server-Sent Events (SSE) for
+  real-time token streaming.
+- **Article management** — full CRUD + bulk upsert for the knowledge base, with
+  automatic vector re-indexing.
+
+## Authentication
+
+Protected endpoints (article writes, stats, admin) require an **API key** sent in the
+`X-API-Key` header. Use the **Authorize** button above to enter your key.
+
+## Rate limits
+
+| Endpoint group | Limit |
+|----------------|-------|
+| `/query` | 10 req/min per IP |
+| All other endpoints | 100 req/min per IP |
+"""
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
         title="Evrópuvefurinn API",
         version=settings.app_version,
+        description=API_DESCRIPTION,
+        openapi_tags=OPENAPI_TAGS,
         lifespan=lifespan,
     )
 

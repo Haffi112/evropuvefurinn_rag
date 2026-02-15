@@ -28,7 +28,15 @@ def _get_embeddings(request: Request) -> EmbeddingService:
 
 # ── POST /articles/bulk  (defined before /{article_id}) ─────
 
-@router.post("/articles/bulk", response_model=BulkUpsertResponse, dependencies=[Depends(verify_api_key)])
+@router.post(
+    "/articles/bulk",
+    response_model=BulkUpsertResponse,
+    dependencies=[Depends(verify_api_key)],
+    summary="Bulk upsert articles",
+    description="Create or update up to 100 articles in one request. Each article is "
+    "upserted individually — failures don't roll back successful writes. "
+    "Vectors are re-indexed automatically.",
+)
 @limiter.limit("100/minute")
 async def bulk_upsert_articles(request: Request, body: BulkUpsertRequest):
     emb = _get_embeddings(request)
@@ -61,7 +69,16 @@ async def bulk_upsert_articles(request: Request, body: BulkUpsertRequest):
 
 # ── POST /articles ──────────────────────────────────────────
 
-@router.post("/articles", response_model=ArticleResponse, status_code=201, dependencies=[Depends(verify_api_key)])
+@router.post(
+    "/articles",
+    response_model=ArticleResponse,
+    status_code=201,
+    dependencies=[Depends(verify_api_key)],
+    summary="Create a new article",
+    description="Insert a single article into the knowledge base. Returns 409 if the "
+    "article ID already exists — use PUT to update instead. The article's "
+    "embedding vector is computed and stored automatically.",
+)
 @limiter.limit("100/minute")
 async def create_article(request: Request, article: ArticleCreate):
     emb = _get_embeddings(request)
@@ -84,7 +101,14 @@ async def create_article(request: Request, article: ArticleCreate):
 
 # ── PUT /articles/{article_id} ──────────────────────────────
 
-@router.put("/articles/{article_id}", response_model=ArticleResponse, dependencies=[Depends(verify_api_key)])
+@router.put(
+    "/articles/{article_id}",
+    response_model=ArticleResponse,
+    dependencies=[Depends(verify_api_key)],
+    summary="Update an existing article",
+    description="Replace all fields of an existing article. The embedding vector is "
+    "recomputed and any cached query results referencing this article are invalidated.",
+)
 @limiter.limit("100/minute")
 async def update_article(request: Request, article_id: str, article: ArticleCreate):
     emb = _get_embeddings(request)
@@ -108,7 +132,14 @@ async def update_article(request: Request, article_id: str, article: ArticleCrea
 
 # ── DELETE /articles/{article_id} ───────────────────────────
 
-@router.delete("/articles/{article_id}", response_model=DeleteResponse, dependencies=[Depends(verify_api_key)])
+@router.delete(
+    "/articles/{article_id}",
+    response_model=DeleteResponse,
+    dependencies=[Depends(verify_api_key)],
+    summary="Delete an article",
+    description="Permanently remove an article from the knowledge base and invalidate "
+    "any cached query results that referenced it.",
+)
 @limiter.limit("100/minute")
 async def delete_article(request: Request, article_id: str):
     if not await db.article_exists(article_id):
@@ -122,7 +153,13 @@ async def delete_article(request: Request, article_id: str):
 
 # ── GET /articles/{article_id} ──────────────────────────────
 
-@router.get("/articles/{article_id}", response_model=ArticleFull)
+@router.get(
+    "/articles/{article_id}",
+    response_model=ArticleFull,
+    summary="Get a single article",
+    description="Retrieve the full content of an article by its ID, including all "
+    "metadata fields and timestamps.",
+)
 @limiter.limit("100/minute")
 async def get_article(request: Request, article_id: str):
     row = await db.get_article(article_id)
@@ -133,7 +170,13 @@ async def get_article(request: Request, article_id: str):
 
 # ── GET /articles ────────────────────────────────────────────
 
-@router.get("/articles", response_model=ArticleListResponse)
+@router.get(
+    "/articles",
+    response_model=ArticleListResponse,
+    summary="List all articles",
+    description="Paginated list of articles in the knowledge base, ordered by most "
+    "recently updated. No authentication required.",
+)
 @limiter.limit("100/minute")
 async def list_articles(
     request: Request,

@@ -17,7 +17,20 @@ def _get_rag(request: Request) -> RAGService:
     return request.app.state.rag
 
 
-@router.post("/query")
+@router.post(
+    "/query",
+    summary="Ask a question about the EU",
+    description=(
+        "Submit a natural-language question. The API retrieves the most relevant "
+        "articles via semantic search, then generates an AI answer grounded in those "
+        "sources.\n\n"
+        "**Streaming (default):** Set `stream: true` to receive Server-Sent Events. "
+        "Events include `references` (sources found), `chunk` (answer tokens), and "
+        "`done` (final metadata).\n\n"
+        "**JSON:** Set `stream: false` to receive a single JSON response with the "
+        "complete answer and references."
+    ),
+)
 @limiter.limit("10/minute")
 async def query_endpoint(request: Request, body: QueryRequest):
     rag = _get_rag(request)
