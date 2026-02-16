@@ -64,6 +64,36 @@ CREATE TABLE IF NOT EXISTS query_log (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_query_log_created_at ON query_log (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS review_users (
+    id          SERIAL PRIMARY KEY,
+    username    TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    is_active   BOOLEAN NOT NULL DEFAULT true,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS review_evaluations (
+    id            BIGSERIAL PRIMARY KEY,
+    query_log_id  BIGINT NOT NULL REFERENCES query_log(id) UNIQUE,
+    reviewer_id   INT NOT NULL REFERENCES review_users(id),
+    checklist     JSONB NOT NULL,
+    note          TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS reviewed_articles (
+    id              BIGSERIAL PRIMARY KEY,
+    query_log_id    BIGINT NOT NULL REFERENCES query_log(id),
+    reviewer_id     INT NOT NULL REFERENCES review_users(id),
+    version         INT NOT NULL DEFAULT 1,
+    title           TEXT NOT NULL,
+    edited_response TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'draft',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ
+);
 """
 
 MIGRATION_SQL = """
@@ -79,6 +109,8 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_articles_embedding_hnsw
     ON articles USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
+
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'pending';
 """
 
 

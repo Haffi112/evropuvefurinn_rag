@@ -1,28 +1,15 @@
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import {
-  Activity,
-  FileText,
-  History,
-  LayoutDashboard,
-  LogOut,
-  Terminal,
-  Users,
-} from "lucide-react";
-import { useAuth } from "@/hooks/use-auth";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { ClipboardList, LogOut } from "lucide-react";
+import { useReviewAuth } from "@review/hooks/use-review-auth";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 
 const NAV_ITEMS = [
-  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/articles", label: "Articles", icon: FileText },
-  { to: "/query-log", label: "Query Log", icon: History },
-  { to: "/playground", label: "Playground", icon: Terminal },
-  { to: "/system", label: "System", icon: Activity },
-  { to: "/reviewers", label: "Reviewers", icon: Users },
+  { to: "/queries", label: "Queries", icon: ClipboardList },
 ] as const;
 
-export default function AppLayout() {
-  const { logout } = useAuth();
+export default function ReviewLayout() {
+  const { logout, username } = useReviewAuth();
   const navigate = useNavigate();
 
   function handleLogout() {
@@ -32,12 +19,11 @@ export default function AppLayout() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Sidebar */}
       <aside className="flex w-56 flex-col border-r bg-sidebar">
         <div className="flex h-14 items-center px-4">
-          <Link to="/dashboard" className="text-sm font-semibold tracking-tight">
-            Evropuvefur Admin
-          </Link>
+          <span className="text-sm font-semibold tracking-tight">
+            Evropuvefur Review
+          </span>
         </div>
         <Separator />
         <nav className="flex-1 space-y-1 px-2 py-3">
@@ -59,7 +45,12 @@ export default function AppLayout() {
           ))}
         </nav>
         <Separator />
-        <div className="p-2">
+        <div className="space-y-1 p-2">
+          {username && (
+            <p className="px-3 py-1 text-xs text-muted-foreground">
+              {username}
+            </p>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -72,7 +63,6 @@ export default function AppLayout() {
         </div>
       </aside>
 
-      {/* Main content */}
       <main className="flex-1 overflow-y-auto">
         <div className="p-6">
           <Outlet />

@@ -2,11 +2,17 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.db import queries as db
 from app.middleware.auth import verify_api_key
+from app.middleware.review_auth import hash_password
 from app.models.schemas import QueryLogEntry, QueryLogListResponse, QueryLogStatsResponse
+from app.models.review_schemas import (
+    ReviewPasswordReset,
+    ReviewUserCreate,
+    ReviewUserResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,3 +72,49 @@ async def list_query_logs(
 async def query_log_stats():
     stats = await db.get_query_log_stats()
     return QueryLogStatsResponse(**stats)
+
+
+# ── Reviewer management ─────────────────────────────────────
+
+
+@router.post(
+    "/reviewers",
+    response_model=ReviewUserResponse,
+    summary="Create a reviewer account",
+)
+async def create_reviewer(body: ReviewUserCreate):
+    existing = await db.get_review_user_by_username(body.username)
+    if existing:
+        raise HTTPException(status_code=409, detail="Username already exists")
+    pw_hash = hash_password(body.password)
+    row = await db.create_review_user(body.username, pw_hash)
+    return ReviewUserResponse(**row)
+
+
+@router.get(
+    "/reviewers",
+    response_model=list[ReviewUserResponse],
+    summary="List all reviewers",
+)
+async def list_reviewers():
+    rows = await db.list_review_users()
+    return [ReviewUserResponse(**r) for r in rows]
+
+
+@router.delete(
+    "/reviewers/{reviewer_id}",
+    summary="Deactivate a reviewer",
+)
+async def deactivate_reviewer(reviewer_id: int):
+    await db.deactivate_review_user(reviewer_id)
+    return {"detail": "Reviewer deactivated"}
+
+
+@router.put(
+    "/reviewers/{reviewer_id}/reset-password",
+    summary="Reset a reviewer's password",
+)
+async def reset_reviewer_password(reviewer_id: int, body: ReviewPasswordReset):
+    pw_hash = hash_password(body.password)
+    await db.reset_review_user_password(reviewer_id, pw_hash)
+    return {"detail": "Password reset"}

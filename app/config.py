@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     # API Authentication
     cms_api_key: str = "change-me-to-a-secret"
+    review_jwt_secret: str = "change-me"
 
     # Database
     database_url: str = "postgresql://user:pass@localhost:5432/evropuvefur"

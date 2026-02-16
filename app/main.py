@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import get_settings
 from app.db.database import close_pool, init_pool
 from app.middleware.rate_limit import setup_rate_limiting
-from app.routers import admin, articles, health, query
+from app.routers import admin, articles, health, query, review
 from app.services.gemini_service import GeminiService
 from app.services.embedding_service import EmbeddingService
 from app.services.rag_service import RAGService
@@ -72,6 +72,11 @@ OPENAPI_TAGS = [
         "name": "admin",
         "description": "Admin-only endpoints for query logs and analytics. Requires an API key.",
     },
+    {
+        "name": "review",
+        "description": "Review interface for evaluating LLM responses and editing articles. "
+        "Uses JWT-based authentication for reviewer accounts.",
+    },
 ]
 
 API_DESCRIPTION = """
@@ -131,6 +136,7 @@ def create_app() -> FastAPI:
     app.include_router(articles.router)
     app.include_router(query.router)
     app.include_router(admin.router)
+    app.include_router(review.router)
 
     # Admin SPA static assets (only mount if directory exists)
     assets_dir = STATIC_DIR / "assets"
@@ -145,6 +151,15 @@ def create_app() -> FastAPI:
         if index.is_file():
             return FileResponse(str(index), media_type="text/html")
         return HTMLResponse("<h1>Admin UI not built</h1><p>Run <code>cd admin && npm run build</code></p>", status_code=404)
+
+    # Review SPA — serves review.html for all /review/* routes
+    @app.get("/review")
+    @app.get("/review/{path:path}")
+    async def review_spa(request: Request, path: str = ""):
+        index = STATIC_DIR / "review.html"
+        if index.is_file():
+            return FileResponse(str(index), media_type="text/html")
+        return HTMLResponse("<h1>Review UI not built</h1><p>Run <code>cd admin && npm run build</code></p>", status_code=404)
 
     return app
 

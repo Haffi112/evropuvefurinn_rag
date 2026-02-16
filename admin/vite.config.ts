@@ -9,11 +9,18 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "@review": path.resolve(__dirname, "./src-review"),
     },
   },
   build: {
     outDir: "../app/static/admin",
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        admin: path.resolve(__dirname, "index.html"),
+        review: path.resolve(__dirname, "review.html"),
+      },
+    },
   },
   server: {
     proxy: {

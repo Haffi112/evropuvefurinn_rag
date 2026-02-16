@@ -11,6 +11,7 @@ import ArticleFormPage from "@/pages/ArticleFormPage";
 import QueryLogPage from "@/pages/QueryLogPage";
 import PlaygroundPage from "@/pages/PlaygroundPage";
 import SystemHealthPage from "@/pages/SystemHealthPage";
+import ReviewersPage from "@/pages/ReviewersPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -38,6 +39,7 @@ export default function App() {
                 <Route path="/query-log" element={<QueryLogPage />} />
                 <Route path="/playground" element={<PlaygroundPage />} />
                 <Route path="/system" element={<SystemHealthPage />} />
+                <Route path="/reviewers" element={<ReviewersPage />} />
               </Route>
             </Route>
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

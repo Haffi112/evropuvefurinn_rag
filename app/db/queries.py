@@ -309,6 +309,199 @@ async def list_query_logs(
         return [dict(r) for r in rows], total
 
 
+# ── Review Users ────────────────────────────────────────────
+
+async def create_review_user(username: str, password_hash: str) -> dict:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO review_users (username, password_hash)
+            VALUES ($1, $2)
+            RETURNING id, username, is_active, created_at
+            """,
+            username, password_hash,
+        )
+        return dict(row)
+
+
+async def list_review_users() -> list[dict]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, username, is_active, created_at FROM review_users ORDER BY created_at DESC"
+        )
+        return [dict(r) for r in rows]
+
+
+async def deactivate_review_user(user_id: int) -> None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE review_users SET is_active = false WHERE id = $1", user_id
+        )
+
+
+async def reset_review_user_password(user_id: int, password_hash: str) -> None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE review_users SET password_hash = $1 WHERE id = $2",
+            password_hash, user_id,
+        )
+
+
+async def get_review_user_by_username(username: str) -> dict | None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, username, password_hash, is_active, created_at FROM review_users WHERE username = $1",
+            username,
+        )
+        return dict(row) if row else None
+
+
+# ── Review Operations ──────────────────────────────────────
+
+async def list_query_logs_for_review(
+    page: int,
+    per_page: int,
+    review_status: str | None = None,
+    search: str | None = None,
+) -> tuple[list[dict], int]:
+    pool = get_pool()
+    offset = (page - 1) * per_page
+
+    conditions: list[str] = []
+    params: list = []
+    idx = 1
+
+    if review_status is not None:
+        conditions.append(f"ql.review_status = ${idx}")
+        params.append(review_status)
+        idx += 1
+    if search:
+        conditions.append(f"ql.query_text ILIKE ${idx}")
+        params.append(f"%{search}%")
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(
+            f"SELECT count(*) FROM query_log ql {where}", *params
+        )
+        rows = await conn.fetch(
+            f"""
+            SELECT ql.id, ql.query_text, ql.model_used, ql.review_status,
+                   ql.cached, ql.created_at,
+                   ru.username AS reviewer_username
+            FROM query_log ql
+            LEFT JOIN review_evaluations re ON re.query_log_id = ql.id
+            LEFT JOIN review_users ru ON ru.id = re.reviewer_id
+            {where}
+            ORDER BY ql.created_at DESC
+            LIMIT ${idx} OFFSET ${idx + 1}
+            """,
+            *params, per_page, offset,
+        )
+        return [dict(r) for r in rows], total
+
+
+async def get_query_log_detail(query_log_id: int) -> dict | None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, query_text, response_text, model_used, "references",
+                   scope_declined, cached, latency_ms, ip_address, created_at,
+                   review_status
+            FROM query_log WHERE id = $1
+            """,
+            query_log_id,
+        )
+        return dict(row) if row else None
+
+
+async def upsert_evaluation(
+    query_log_id: int, reviewer_id: int, checklist: dict, note: str | None
+) -> dict:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO review_evaluations (query_log_id, reviewer_id, checklist, note)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (query_log_id) DO UPDATE SET
+                reviewer_id = EXCLUDED.reviewer_id,
+                checklist = EXCLUDED.checklist,
+                note = EXCLUDED.note,
+                updated_at = now()
+            RETURNING *
+            """,
+            query_log_id, reviewer_id, json.dumps(checklist), note,
+        )
+        return dict(row)
+
+
+async def get_evaluation(query_log_id: int) -> dict | None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM review_evaluations WHERE query_log_id = $1",
+            query_log_id,
+        )
+        if not row:
+            return None
+        d = dict(row)
+        if isinstance(d.get("checklist"), str):
+            d["checklist"] = json.loads(d["checklist"])
+        return d
+
+
+async def update_review_status(query_log_id: int, status: str) -> None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE query_log SET review_status = $1 WHERE id = $2",
+            status, query_log_id,
+        )
+
+
+async def insert_reviewed_article(
+    query_log_id: int, reviewer_id: int, title: str, edited_response: str
+) -> dict:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        max_version = await conn.fetchval(
+            "SELECT COALESCE(MAX(version), 0) FROM reviewed_articles WHERE query_log_id = $1",
+            query_log_id,
+        )
+        row = await conn.fetchrow(
+            """
+            INSERT INTO reviewed_articles (query_log_id, reviewer_id, version, title, edited_response)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING *
+            """,
+            query_log_id, reviewer_id, max_version + 1, title, edited_response,
+        )
+        return dict(row)
+
+
+async def get_latest_reviewed_article(query_log_id: int) -> dict | None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT * FROM reviewed_articles
+            WHERE query_log_id = $1
+            ORDER BY version DESC LIMIT 1
+            """,
+            query_log_id,
+        )
+        return dict(row) if row else None
+
+
 async def get_query_log_stats() -> dict:
     pool = get_pool()
     async with pool.acquire() as conn:
