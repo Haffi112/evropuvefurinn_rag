@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { ChevronDown, ChevronRight, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, Eye, EyeOff, Search } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ interface QueryLogEntry {
   latency_ms: number | null;
   ip_address: string | null;
   created_at: string;
+  review_status: string;
 }
 
 interface QueryLogList {
@@ -54,11 +55,20 @@ interface QueryLogStats {
 }
 
 export default function QueryLogPage() {
+  const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [cachedFilter, setCachedFilter] = useState<string>("all");
   const [modelFilter, setModelFilter] = useState<string>("all");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+
+  async function toggleExclusion(queryId: number, newStatus: string) {
+    await apiFetch(`/api/v1/admin/query-log/${queryId}/review-status`, {
+      method: "PATCH",
+      body: JSON.stringify({ review_status: newStatus }),
+    });
+    queryClient.invalidateQueries({ queryKey: ["query-logs"] });
+  }
 
   const params = new URLSearchParams();
   params.set("page", String(page));
@@ -195,12 +205,15 @@ export default function QueryLogPage() {
                         {log.model_used ?? "—"}
                       </Badge>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="space-x-1">
+                      {log.review_status === "excluded" && (
+                        <Badge variant="outline" className="text-xs text-muted-foreground">excluded</Badge>
+                      )}
                       {log.cached && <Badge variant="secondary">cached</Badge>}
                       {log.scope_declined && (
                         <Badge variant="destructive">declined</Badge>
                       )}
-                      {!log.cached && !log.scope_declined && <Badge>live</Badge>}
+                      {!log.cached && !log.scope_declined && log.review_status !== "excluded" && <Badge>live</Badge>}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {log.latency_ms != null ? `${log.latency_ms}ms` : "—"}
@@ -217,8 +230,40 @@ export default function QueryLogPage() {
                   {expanded.has(log.id) && (
                     <TableRow key={`${log.id}-detail`}>
                       <TableCell colSpan={7} className="bg-muted/30 p-4">
-                        <div className="space-y-2 text-sm">
-                          <p className="font-medium">Response:</p>
+                        <div className="space-y-3 text-sm">
+                          <div className="flex items-center justify-between">
+                            <p className="font-medium">Response:</p>
+                            <div className="flex items-center gap-2">
+                              {log.review_status !== "pending" && (
+                                <Badge variant="outline" className="text-xs">
+                                  {log.review_status}
+                                </Badge>
+                              )}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleExclusion(
+                                    log.id,
+                                    log.review_status === "excluded" ? "pending" : "excluded",
+                                  );
+                                }}
+                              >
+                                {log.review_status === "excluded" ? (
+                                  <>
+                                    <Eye className="mr-1.5 h-3.5 w-3.5" />
+                                    Include in review
+                                  </>
+                                ) : (
+                                  <>
+                                    <EyeOff className="mr-1.5 h-3.5 w-3.5" />
+                                    Exclude from review
+                                  </>
+                                )}
+                              </Button>
+                            </div>
+                          </div>
                           <p className="max-h-40 overflow-y-auto whitespace-pre-wrap text-muted-foreground">
                             {log.response_text ?? "No response"}
                           </p>

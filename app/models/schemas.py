@@ -159,6 +159,7 @@ class QueryLogEntry(BaseModel):
     latency_ms: int | None = None
     ip_address: str | None = None
     created_at: datetime
+    review_status: str = "pending"
 
 
 class QueryLogListResponse(BaseModel):

@@ -10,8 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 
 // ── Types ──────────────────────────────────────────────────
@@ -100,6 +100,9 @@ export default function ReviewDetailPage() {
     enabled: !!id,
   });
 
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ["review-query", id] });
+
   if (isLoading) {
     return (
       <div className="space-y-4">
@@ -114,8 +117,9 @@ export default function ReviewDetailPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-3">
+    <div className="space-y-8">
+      {/* ── Header ────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <h1 className="text-2xl font-semibold">Query #{data.id}</h1>
         <Badge
           variant={
@@ -128,87 +132,65 @@ export default function ReviewDetailPage() {
         >
           {data.review_status}
         </Badge>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          {data.model_used && (
+            <span className="rounded bg-muted px-1.5 py-0.5">
+              {data.model_used}
+            </span>
+          )}
+          {data.latency_ms != null && (
+            <span className="rounded bg-muted px-1.5 py-0.5">
+              {data.latency_ms}ms
+            </span>
+          )}
+          {data.cached && (
+            <span className="rounded bg-muted px-1.5 py-0.5">cached</span>
+          )}
+          {data.scope_declined && (
+            <span className="rounded bg-muted px-1.5 py-0.5">
+              scope declined
+            </span>
+          )}
+          <span>
+            {formatDistanceToNow(new Date(data.created_at), {
+              addSuffix: true,
+            })}
+          </span>
+        </div>
       </div>
 
-      <Tabs defaultValue="original">
-        <TabsList>
-          <TabsTrigger value="original">Original</TabsTrigger>
-          <TabsTrigger value="evaluation">Evaluation</TabsTrigger>
-          <TabsTrigger value="editor">Article Editor</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="original" className="mt-4">
-          <OriginalTab data={data} />
-        </TabsContent>
-
-        <TabsContent value="evaluation" className="mt-4">
-          <EvaluationTab
-            queryId={data.id}
-            existing={data.evaluation}
-            onSaved={() =>
-              queryClient.invalidateQueries({
-                queryKey: ["review-query", id],
-              })
-            }
-          />
-        </TabsContent>
-
-        <TabsContent value="editor" className="mt-4">
-          <ArticleEditorTab
-            queryId={data.id}
-            defaultTitle={data.query_text}
-            defaultBody={data.response_text ?? ""}
-            existing={data.latest_article}
-            onSaved={() =>
-              queryClient.invalidateQueries({
-                queryKey: ["review-query", id],
-              })
-            }
-          />
-        </TabsContent>
-      </Tabs>
-    </div>
-  );
-}
-
-// ── Tab 1: Original ────────────────────────────────────────
-
-function OriginalTab({ data }: { data: QueryDetail }) {
-  return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
-      <div className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Query</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="rounded bg-muted/50 p-3 font-mono text-sm">
+      {/* ── Two-column grid ───────────────────────────── */}
+      <div className="grid gap-8 lg:grid-cols-[1fr_380px]">
+        {/* Left column: query, response, references */}
+        <div className="space-y-8">
+          {/* Query */}
+          <section>
+            <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Query
+            </h2>
+            <p className="rounded border-l-2 border-primary/30 bg-muted/50 p-3 font-mono text-sm">
               {data.query_text}
             </p>
-          </CardContent>
-        </Card>
+          </section>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Response</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="prose prose-sm max-w-none">
+          {/* Response */}
+          <section>
+            <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Response
+            </h2>
+            <div className="border-l-2 border-primary/30 pl-4 prose prose-sm max-w-none">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {data.response_text ?? "*No response*"}
               </ReactMarkdown>
             </div>
-          </CardContent>
-        </Card>
+          </section>
 
-        {data.references.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">
+          {/* References */}
+          {data.references.length > 0 && (
+            <section>
+              <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 References ({data.references.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
+              </h2>
               <ul className="space-y-2">
                 {data.references.map((ref, i) => (
                   <li
@@ -238,53 +220,36 @@ function OriginalTab({ data }: { data: QueryDetail }) {
                   </li>
                 ))}
               </ul>
-            </CardContent>
-          </Card>
-        )}
+            </section>
+          )}
+        </div>
+
+        {/* Right column: evaluation (sticky) */}
+        <div className="lg:sticky lg:top-6 lg:self-start lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+          <EvaluationPanel
+            queryId={data.id}
+            existing={data.evaluation}
+            onSaved={invalidate}
+          />
+        </div>
       </div>
 
-      {/* Metadata sidebar */}
-      <div className="space-y-4">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Metadata</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <MetaRow label="Model" value={data.model_used ?? "\u2014"} />
-            <MetaRow
-              label="Latency"
-              value={data.latency_ms != null ? `${data.latency_ms}ms` : "\u2014"}
-            />
-            <MetaRow label="Cached" value={data.cached ? "Yes" : "No"} />
-            <MetaRow
-              label="Scope declined"
-              value={data.scope_declined ? "Yes" : "No"}
-            />
-            <MetaRow
-              label="Date"
-              value={formatDistanceToNow(new Date(data.created_at), {
-                addSuffix: true,
-              })}
-            />
-          </CardContent>
-        </Card>
-      </div>
+      {/* ── Article Editor (full-width) ───────────────── */}
+      <Separator />
+      <ArticleEditor
+        queryId={data.id}
+        defaultTitle={data.query_text}
+        defaultBody={data.response_text ?? ""}
+        existing={data.latest_article}
+        onSaved={invalidate}
+      />
     </div>
   );
 }
 
-function MetaRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-medium">{value}</span>
-    </div>
-  );
-}
+// ── Evaluation Panel ──────────────────────────────────────
 
-// ── Tab 2: Evaluation ──────────────────────────────────────
-
-function EvaluationTab({
+function EvaluationPanel({
   queryId,
   existing,
   onSaved,
@@ -320,29 +285,29 @@ function EvaluationTab({
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="pb-3">
         <CardTitle className="text-sm">Evaluation Checklist</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="space-y-3">
+        <div className="space-y-2">
           {(Object.keys(CHECKLIST_LABELS) as (keyof ChecklistState)[]).map(
             (key) => (
               <label
                 key={key}
-                className="flex cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors hover:bg-muted/50"
+                className="flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 transition-colors hover:bg-muted/50"
               >
                 <button
                   type="button"
                   role="switch"
                   aria-checked={checklist[key]}
                   onClick={() => toggle(key)}
-                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
                     checklist[key] ? "bg-primary" : "bg-input"
                   }`}
                 >
                   <span
-                    className={`pointer-events-none block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform ${
-                      checklist[key] ? "translate-x-5" : "translate-x-0"
+                    className={`pointer-events-none block h-4 w-4 rounded-full bg-background shadow-lg ring-0 transition-transform ${
+                      checklist[key] ? "translate-x-4" : "translate-x-0"
                     }`}
                   />
                 </button>
@@ -358,11 +323,12 @@ function EvaluationTab({
             placeholder="Optional notes about this evaluation..."
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            rows={4}
+            rows={3}
           />
         </div>
 
         <Button
+          className="w-full"
           onClick={() => mutation.mutate()}
           disabled={mutation.isPending}
         >
@@ -382,9 +348,9 @@ function EvaluationTab({
   );
 }
 
-// ── Tab 3: Article Editor ──────────────────────────────────
+// ── Article Editor ────────────────────────────────────────
 
-function ArticleEditorTab({
+function ArticleEditor({
   queryId,
   defaultTitle,
   defaultBody,
@@ -433,78 +399,77 @@ function ArticleEditorTab({
   }
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-sm">Article Editor</CardTitle>
-            {existing && (
-              <span className="text-xs text-muted-foreground">
-                v{existing.version}
-                {" \u2014 saved "}
-                {formatDistanceToNow(
-                  new Date(existing.updated_at ?? existing.created_at),
-                  { addSuffix: true },
-                )}
-              </span>
+    <section>
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Article Editor
+        </h2>
+        {existing && (
+          <span className="text-xs text-muted-foreground">
+            v{existing.version}
+            {" — saved "}
+            {formatDistanceToNow(
+              new Date(existing.updated_at ?? existing.created_at),
+              { addSuffix: true },
             )}
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Title</label>
-            <Input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Article title"
-            />
-          </div>
+          </span>
+        )}
+      </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Content</label>
-            <Textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              rows={16}
-              className="font-mono text-sm"
-            />
-          </div>
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Title</label>
+          <Input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Article title"
+          />
+        </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              onClick={() => mutation.mutate()}
-              disabled={mutation.isPending}
-            >
-              {mutation.isPending ? "Saving..." : "Save Draft"}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleExport("md")}
-              disabled={!existing}
-            >
-              <Download className="mr-2 h-4 w-4" />
-              Download .md
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleExport("docx")}
-              disabled={!existing}
-            >
-              <Download className="mr-2 h-4 w-4" />
-              Download .docx
-            </Button>
-          </div>
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Content</label>
+          <Textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={16}
+            className="font-mono text-sm"
+          />
+        </div>
 
-          {mutation.isSuccess && (
-            <p className="text-sm text-green-600">Draft saved.</p>
-          )}
-          {mutation.isError && (
-            <p className="text-sm text-destructive">Error saving draft.</p>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            onClick={() => mutation.mutate()}
+            disabled={mutation.isPending}
+          >
+            {mutation.isPending ? "Saving..." : "Save Draft"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleExport("md")}
+            disabled={!existing}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Download .md
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleExport("docx")}
+            disabled={!existing}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Download .docx
+          </Button>
+        </div>
+
+        {mutation.isSuccess && (
+          <p className="text-sm text-green-600">Draft saved.</p>
+        )}
+        {mutation.isError && (
+          <p className="text-sm text-destructive">Error saving draft.</p>
+        )}
+      </div>
+    </section>
   );
 }

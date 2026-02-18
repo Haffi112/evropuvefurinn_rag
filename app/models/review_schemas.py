@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -31,6 +32,12 @@ class ReviewUserResponse(BaseModel):
 
 class ReviewPasswordReset(BaseModel):
     password: str
+
+
+# ── Review status ──────────────────────────────────────────
+
+class ReviewStatusUpdate(BaseModel):
+    review_status: Literal["pending", "excluded", "reviewed", "approved"]
 
 
 # ── Evaluation ──────────────────────────────────────────────

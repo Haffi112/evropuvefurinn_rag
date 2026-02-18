@@ -299,7 +299,8 @@ async def list_query_logs(
         rows = await conn.fetch(
             f"""
             SELECT id, query_text, response_text, model_used, "references",
-                   scope_declined, cached, latency_ms, ip_address, created_at
+                   scope_declined, cached, latency_ms, ip_address, created_at,
+                   review_status
             FROM query_log {where}
             ORDER BY created_at DESC
             LIMIT ${idx} OFFSET ${idx + 1}
@@ -379,6 +380,11 @@ async def list_query_logs_for_review(
     if review_status is not None:
         conditions.append(f"ql.review_status = ${idx}")
         params.append(review_status)
+        idx += 1
+    else:
+        # Hide excluded queries by default
+        conditions.append(f"ql.review_status != ${idx}")
+        params.append("excluded")
         idx += 1
     if search:
         conditions.append(f"ql.query_text ILIKE ${idx}")

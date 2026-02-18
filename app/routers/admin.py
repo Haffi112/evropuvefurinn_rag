@@ -10,6 +10,7 @@ from app.middleware.review_auth import hash_password
 from app.models.schemas import QueryLogEntry, QueryLogListResponse, QueryLogStatsResponse
 from app.models.review_schemas import (
     ReviewPasswordReset,
+    ReviewStatusUpdate,
     ReviewUserCreate,
     ReviewUserResponse,
 )
@@ -118,3 +119,20 @@ async def reset_reviewer_password(reviewer_id: int, body: ReviewPasswordReset):
     pw_hash = hash_password(body.password)
     await db.reset_review_user_password(reviewer_id, pw_hash)
     return {"detail": "Password reset"}
+
+
+# ── Review status ──────────────────────────────────────────
+
+
+@router.patch(
+    "/query-log/{query_id}/review-status",
+    summary="Set review status for a query",
+    description="Set the review status of a query log entry. "
+    "Allowed values: pending, excluded, reviewed, approved.",
+)
+async def set_review_status(query_id: int, body: ReviewStatusUpdate):
+    log = await db.get_query_log_detail(query_id)
+    if not log:
+        raise HTTPException(status_code=404, detail="Query not found")
+    await db.update_review_status(query_id, body.review_status)
+    return {"detail": f"Review status set to '{body.review_status}'"}

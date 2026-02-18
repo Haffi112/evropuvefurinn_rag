@@ -84,6 +84,8 @@ async def get_query_detail(
     row = await db.get_query_log_detail(query_id)
     if not row:
         raise HTTPException(status_code=404, detail="Query not found")
+    if row.get("review_status") == "excluded":
+        raise HTTPException(status_code=403, detail="This query has been excluded from review")
 
     refs = row.get("references")
     if isinstance(refs, str):
