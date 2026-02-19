@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import {
+  AlertCircle,
   Check,
   ChevronDown,
   ChevronRight,
+  Database,
   Download,
   FileArchive,
   Minus,
@@ -156,6 +158,19 @@ export default function ReviewsPage() {
             <FileArchive className="mr-1.5 h-3.5 w-3.5" />
             Export Articles
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              downloadFile(
+                "/api/v1/admin/reviews/export/all",
+                "evropuvefur_all_data.zip",
+              )
+            }
+          >
+            <Database className="mr-1.5 h-3.5 w-3.5" />
+            Export All Data
+          </Button>
         </div>
       </div>
 
@@ -199,6 +214,19 @@ export default function ReviewsPage() {
             <Skeleton key={i} className="h-10 w-full" />
           ))}
         </div>
+      ) : evals.isError ? (
+        <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-destructive/50 bg-destructive/5 py-12">
+          <AlertCircle className="h-8 w-8 text-destructive" />
+          <p className="text-sm font-medium text-destructive">
+            Failed to load evaluations
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {evals.error instanceof Error ? evals.error.message : "An unexpected error occurred"}
+          </p>
+          <Button variant="outline" size="sm" onClick={() => evals.refetch()} className="mt-2">
+            Try again
+          </Button>
+        </div>
       ) : (
         <>
           <Table>
@@ -217,9 +245,8 @@ export default function ReviewsPage() {
               {evals.data?.evaluations.map((ev) => {
                 const score = checklistScore(ev.checklist);
                 return (
-                  <>
+                  <Fragment key={ev.id}>
                     <TableRow
-                      key={ev.id}
                       className="cursor-pointer"
                       onClick={() => toggleExpand(ev.id)}
                     >
@@ -298,10 +325,10 @@ export default function ReviewsPage() {
                         </TableCell>
                       </TableRow>
                     )}
-                  </>
+                  </Fragment>
                 );
               })}
-              {evals.data?.evaluations.length === 0 && (
+              {(!evals.data || evals.data.evaluations.length === 0) && (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground">
                     No evaluations found

@@ -523,3 +523,133 @@ async def get_query_log_stats() -> dict:
             """
         )
         return dict(row)
+
+
+# ── Admin Review Listing ──────────────────────────────────
+
+async def list_evaluations_for_admin(
+    page: int,
+    per_page: int,
+    review_status: str | None = None,
+    reviewer_id: int | None = None,
+    search: str | None = None,
+) -> tuple[list[dict], int]:
+    pool = get_pool()
+    offset = (page - 1) * per_page
+
+    conditions: list[str] = []
+    params: list = []
+    idx = 1
+
+    if review_status is not None:
+        conditions.append(f"ql.review_status = ${idx}")
+        params.append(review_status)
+        idx += 1
+    if reviewer_id is not None:
+        conditions.append(f"re.reviewer_id = ${idx}")
+        params.append(reviewer_id)
+        idx += 1
+    if search:
+        conditions.append(f"ql.query_text ILIKE ${idx}")
+        params.append(f"%{search}%")
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    base_sql = """
+        FROM review_evaluations re
+        JOIN query_log ql ON ql.id = re.query_log_id
+        JOIN review_users ru ON ru.id = re.reviewer_id
+        {where}
+    """.format(where=where)
+
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(
+            f"SELECT count(*) {base_sql}", *params
+        )
+        rows = await conn.fetch(
+            f"""
+            SELECT re.id, re.query_log_id, ql.query_text,
+                   ru.username AS reviewer_username,
+                   re.checklist, re.note,
+                   ql.review_status,
+                   EXISTS(SELECT 1 FROM reviewed_articles ra WHERE ra.query_log_id = ql.id) AS has_article,
+                   re.created_at AS evaluation_date,
+                   re.updated_at AS evaluation_updated,
+                   ql.created_at AS query_date
+            {base_sql}
+            ORDER BY re.created_at DESC
+            LIMIT ${idx} OFFSET ${idx + 1}
+            """,
+            *params, per_page, offset,
+        )
+        result = []
+        for r in rows:
+            d = dict(r)
+            if isinstance(d.get("checklist"), str):
+                d["checklist"] = json.loads(d["checklist"])
+            result.append(d)
+        return result, total
+
+
+async def get_all_evaluations_for_export() -> list[dict]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT re.id, re.query_log_id, ql.query_text,
+                   ru.username AS reviewer_username,
+                   re.checklist, re.note,
+                   ql.review_status,
+                   re.created_at AS evaluation_date
+            FROM review_evaluations re
+            JOIN query_log ql ON ql.id = re.query_log_id
+            JOIN review_users ru ON ru.id = re.reviewer_id
+            ORDER BY re.created_at DESC
+            """
+        )
+        result = []
+        for r in rows:
+            d = dict(r)
+            if isinstance(d.get("checklist"), str):
+                d["checklist"] = json.loads(d["checklist"])
+            result.append(d)
+        return result
+
+
+async def get_all_query_logs_for_export() -> list[dict]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, query_text, response_text, model_used, "references",
+                   scope_declined, cached, latency_ms, ip_address, review_status, created_at
+            FROM query_log
+            ORDER BY created_at DESC
+            """
+        )
+        return [dict(r) for r in rows]
+
+
+async def get_all_reviewed_articles_latest() -> list[dict]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT ON (ra.query_log_id)
+                   ra.id, ra.query_log_id, ra.version, ra.title,
+                   ra.edited_response, ra.created_at,
+                   ql.query_text, ql."references"
+            FROM reviewed_articles ra
+            JOIN query_log ql ON ql.id = ra.query_log_id
+            ORDER BY ra.query_log_id, ra.version DESC
+            """
+        )
+        result = []
+        for r in rows:
+            d = dict(r)
+            refs = d.get("references")
+            if isinstance(refs, str):
+                d["references"] = json.loads(refs)
+            result.append(d)
+        return result

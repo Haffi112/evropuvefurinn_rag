@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.review_schemas import EvaluationChecklist
+
 
 # ── Article schemas ──────────────────────────────────────────
 
@@ -176,6 +178,31 @@ class QueryLogStatsResponse(BaseModel):
     cached_queries: int
     declined_queries: int
     avg_latency_ms: int
+
+
+# ── Admin review schemas ────────────────────────────────────
+
+
+class AdminEvaluationListItem(BaseModel):
+    id: int
+    query_log_id: int
+    query_text: str
+    reviewer_username: str
+    checklist: EvaluationChecklist
+    note: str | None
+    review_status: str
+    has_article: bool
+    evaluation_date: datetime
+    evaluation_updated: datetime | None = None
+    query_date: datetime
+
+
+class AdminEvaluationListResponse(BaseModel):
+    evaluations: list[AdminEvaluationListItem]
+    total: int
+    page: int
+    per_page: int
+    total_pages: int
 
 
 # ── Error schemas ────────────────────────────────────────────
