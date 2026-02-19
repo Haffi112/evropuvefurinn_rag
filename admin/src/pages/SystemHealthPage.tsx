@@ -36,7 +36,7 @@ export default function SystemHealthPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">System Health</h1>
+      <h1 className="text-3xl font-bold">System Health</h1>
 
       {/* Overall status */}
       {health.isLoading ? (
@@ -60,7 +60,7 @@ export default function SystemHealthPage() {
               {Object.entries(h.checks).map(([svc, status]) => (
                 <div
                   key={svc}
-                  className="flex items-center justify-between rounded-md border p-3"
+                  className="flex items-center justify-between rounded-sm border p-3"
                 >
                   <span className="text-sm font-medium capitalize">{svc}</span>
                   <Badge
@@ -97,15 +97,15 @@ export default function SystemHealthPage() {
                   </span>
                 </div>
                 {q.limit ? (
-                  <div className="h-2 overflow-hidden rounded-full bg-muted">
+                  <div className="h-1.5 overflow-hidden rounded-sm bg-muted">
                     <div
-                      className="h-full rounded-full bg-primary transition-all"
+                      className="h-full rounded-sm bg-primary transition-all"
                       style={{ width: `${Math.min((q.used / q.limit) * 100, 100)}%` }}
                     />
                   </div>
                 ) : (
-                  <div className="h-2 overflow-hidden rounded-full bg-muted">
-                    <div className="h-full w-full rounded-full bg-green-500/30" />
+                  <div className="h-1.5 overflow-hidden rounded-sm bg-muted">
+                    <div className="h-full w-full rounded-sm bg-green-500/30" />
                   </div>
                 )}
                 {q.resets_at && (

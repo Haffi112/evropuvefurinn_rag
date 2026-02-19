@@ -65,20 +65,20 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Dashboard</h1>
+      <h1 className="text-3xl font-bold">Dashboard</h1>
 
       {/* Stat cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           title="Total Articles"
           value={s?.articles.total}
-          icon={<FileText className="h-4 w-4 text-muted-foreground" />}
+          icon={<FileText className="h-4 w-4 text-primary" />}
           loading={stats.isLoading}
         />
         <StatCard
           title="Queries Today"
           value={s?.queries.today}
-          icon={<Zap className="h-4 w-4 text-muted-foreground" />}
+          icon={<Zap className="h-4 w-4 text-primary" />}
           loading={stats.isLoading}
         />
         <StatCard
@@ -88,13 +88,13 @@ export default function DashboardPage() {
               ? `${s.quota.gemini_3_pro?.used ?? 0} / ${s.quota.gemini_3_pro?.limit ?? "∞"}`
               : undefined
           }
-          icon={<Database className="h-4 w-4 text-muted-foreground" />}
+          icon={<Database className="h-4 w-4 text-primary" />}
           loading={stats.isLoading}
         />
         <StatCard
           title="System Status"
           value={health.data?.status === "healthy" ? "Healthy" : "Degraded"}
-          icon={<ShieldAlert className="h-4 w-4 text-muted-foreground" />}
+          icon={<ShieldAlert className="h-4 w-4 text-primary" />}
           loading={health.isLoading}
         />
       </div>
@@ -200,16 +200,16 @@ function StatCard({
   loading: boolean;
 }) {
   return (
-    <Card>
+    <Card className="card-accent">
       <CardHeader className="flex flex-row items-center justify-between pb-2">
-        <CardTitle className="text-sm font-medium">{title}</CardTitle>
+        <CardTitle className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{title}</CardTitle>
         {icon}
       </CardHeader>
       <CardContent>
         {loading ? (
           <Skeleton className="h-7 w-20" />
         ) : (
-          <div className="text-2xl font-bold">{value ?? "—"}</div>
+          <div className="text-2xl font-bold text-primary">{value ?? "—"}</div>
         )}
       </CardContent>
     </Card>

@@ -33,10 +33,10 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
-      <Card className="w-full max-w-sm">
+    <div className="flex min-h-screen items-center justify-center bg-secondary p-4">
+      <Card className="w-full max-w-sm border-t-4 border-t-primary">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Evropuvefur Admin</CardTitle>
+          <CardTitle className="text-2xl font-bold text-primary">Evropuvefur Admin</CardTitle>
           <CardDescription>Enter your CMS API key to connect</CardDescription>
         </CardHeader>
         <CardContent>

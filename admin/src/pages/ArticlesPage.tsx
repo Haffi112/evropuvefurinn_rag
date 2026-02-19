@@ -51,8 +51,8 @@ export default function ArticlesPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Articles</h1>
-        <Button asChild size="sm">
+        <h1 className="text-3xl font-bold">Articles</h1>
+        <Button asChild size="sm" className="btn-cta">
           <Link to="/articles/new">
             <Plus className="mr-2 h-4 w-4" />
             New Article

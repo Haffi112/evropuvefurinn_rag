@@ -84,7 +84,7 @@ export default function ArticleDetailPage() {
         </Button>
       </div>
 
-      <Card>
+      <Card className="card-accent">
         <CardHeader>
           <CardTitle>{article.title}</CardTitle>
           <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
@@ -103,14 +103,14 @@ export default function ArticleDetailPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <h3 className="mb-1 text-sm font-medium text-muted-foreground">
+            <h3 className="mb-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">
               Question
             </h3>
             <p className="whitespace-pre-wrap">{article.question}</p>
           </div>
           <Separator />
           <div>
-            <h3 className="mb-1 text-sm font-medium text-muted-foreground">
+            <h3 className="mb-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">
               Answer
             </h3>
             <p className="whitespace-pre-wrap">{article.answer}</p>

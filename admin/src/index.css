@@ -45,41 +45,43 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-cta: oklch(0.468 0.215 358);
+  --color-cta-foreground: oklch(1 0 0);
 }
 
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
+  --radius: 0.125rem;
+  --background: oklch(0.993 0 0);
+  --foreground: oklch(0.222 0 0);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
+  --card-foreground: oklch(0.222 0 0);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.141 0.005 285.823);
-  --primary: oklch(0.21 0.006 285.885);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.967 0.001 286.375);
-  --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.21 0.006 285.885);
+  --popover-foreground: oklch(0.222 0 0);
+  --primary: oklch(0.303 0.182 277);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.945 0.022 265);
+  --secondary-foreground: oklch(0.303 0.182 277);
+  --muted: oklch(0.968 0 0);
+  --muted-foreground: oklch(0.538 0 0);
+  --accent: oklch(0.945 0.022 265);
+  --accent-foreground: oklch(0.215 0.145 278);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.705 0.015 286.067);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
+  --border: oklch(0.894 0 0);
+  --input: oklch(0.894 0 0);
+  --ring: oklch(0.303 0.182 277);
+  --chart-1: oklch(0.303 0.182 277);
+  --chart-2: oklch(0.468 0.215 358);
+  --chart-3: oklch(0.6 0.118 184.704);
   --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-primary: oklch(0.21 0.006 285.885);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.705 0.015 286.067);
+  --chart-5: oklch(0.6 0.15 150);
+  --sidebar: oklch(0.215 0.145 278);
+  --sidebar-foreground: oklch(0.945 0.022 265);
+  --sidebar-primary: oklch(1 0 0);
+  --sidebar-primary-foreground: oklch(0.215 0.145 278);
+  --sidebar-accent: oklch(0.303 0.182 277);
+  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-border: oklch(0.303 0.182 277);
+  --sidebar-ring: oklch(0.945 0.022 265);
 }
 
 @layer base {
@@ -88,5 +90,31 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: 'Atkinson Hyperlegible Next', system-ui, sans-serif;
   }
+}
+
+/* Card bottom accent — only on content cards via .card-accent class */
+.card-accent {
+  border-bottom: 4px solid oklch(0.303 0.182 277);
+}
+
+/* Expanded detail rows — left accent */
+.detail-accent {
+  border-left: 4px solid oklch(0.303 0.182 277);
+}
+
+/* CTA button color (magenta) */
+.btn-cta {
+  background-color: oklch(0.468 0.215 358);
+  color: white;
+}
+.btn-cta:hover {
+  background-color: oklch(0.42 0.2 358);
+}
+
+/* Native form element accent */
+input[type="checkbox"],
+input[type="range"] {
+  accent-color: oklch(0.303 0.182 277);
 }

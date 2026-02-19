@@ -158,7 +158,7 @@ export default function PlaygroundPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Query Playground</h1>
+      <h1 className="text-3xl font-bold">Query Playground</h1>
 
       <Card>
         <CardContent className="space-y-4 pt-6">
@@ -268,7 +268,7 @@ export default function PlaygroundPage() {
 
       {/* Thinking trace */}
       {thinking && (
-        <details className="rounded-lg border bg-muted/50 p-4">
+        <details className="rounded-sm border bg-secondary/30 p-4 detail-accent">
           <summary className="cursor-pointer text-sm font-medium">
             Thinking trace ({thinking.length} chars)
           </summary>
@@ -311,7 +311,7 @@ export default function PlaygroundPage() {
           </h3>
           <div className="grid gap-2 sm:grid-cols-2">
             {refs.map((ref) => (
-              <Card key={ref.id} className="p-3">
+              <Card key={ref.id} className="p-3 border-b-2 border-b-primary/50">
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <p className="text-sm font-medium">{ref.title}</p>

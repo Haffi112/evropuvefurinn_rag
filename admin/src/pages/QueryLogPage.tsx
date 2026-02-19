@@ -101,7 +101,7 @@ export default function QueryLogPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Query Log</h1>
+      <h1 className="text-3xl font-bold">Query Log</h1>
 
       {/* Stats bar */}
       {st && (
@@ -229,7 +229,7 @@ export default function QueryLogPage() {
                   </TableRow>
                   {expanded.has(log.id) && (
                     <TableRow key={`${log.id}-detail`}>
-                      <TableCell colSpan={7} className="bg-muted/30 p-4">
+                      <TableCell colSpan={7} className="bg-secondary/50 p-4 detail-accent">
                         <div className="space-y-3 text-sm">
                           <div className="flex items-center justify-between">
                             <p className="font-medium">Response:</p>
@@ -328,14 +328,14 @@ export default function QueryLogPage() {
 
 function MiniStat({ label, value }: { label: string; value: string | number }) {
   return (
-    <Card>
+    <Card className="card-accent">
       <CardHeader className="pb-2">
-        <CardTitle className="text-xs font-medium text-muted-foreground">
+        <CardTitle className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
           {label}
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="text-xl font-bold">{value}</div>
+        <div className="text-xl font-bold text-primary">{value}</div>
       </CardContent>
     </Card>
   );

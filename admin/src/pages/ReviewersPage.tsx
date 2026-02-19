@@ -49,7 +49,7 @@ export default function ReviewersPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Reviewers</h1>
+        <h1 className="text-3xl font-bold">Reviewers</h1>
         <Button size="sm" onClick={() => setShowCreate(true)}>
           <Plus className="mr-2 h-4 w-4" />
           Add Reviewer

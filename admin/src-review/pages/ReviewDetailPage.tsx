@@ -120,7 +120,7 @@ export default function ReviewDetailPage() {
     <div className="space-y-8">
       {/* ── Header ────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <h1 className="text-2xl font-semibold">Query #{data.id}</h1>
+        <h1 className="text-3xl font-bold">Query #{data.id}</h1>
         <Badge
           variant={
             data.review_status === "approved"
@@ -134,20 +134,20 @@ export default function ReviewDetailPage() {
         </Badge>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           {data.model_used && (
-            <span className="rounded bg-muted px-1.5 py-0.5">
+            <span className="rounded-sm bg-secondary font-medium px-1.5 py-0.5">
               {data.model_used}
             </span>
           )}
           {data.latency_ms != null && (
-            <span className="rounded bg-muted px-1.5 py-0.5">
+            <span className="rounded-sm bg-secondary font-medium px-1.5 py-0.5">
               {data.latency_ms}ms
             </span>
           )}
           {data.cached && (
-            <span className="rounded bg-muted px-1.5 py-0.5">cached</span>
+            <span className="rounded-sm bg-secondary font-medium px-1.5 py-0.5">cached</span>
           )}
           {data.scope_declined && (
-            <span className="rounded bg-muted px-1.5 py-0.5">
+            <span className="rounded-sm bg-secondary font-medium px-1.5 py-0.5">
               scope declined
             </span>
           )}
@@ -165,20 +165,20 @@ export default function ReviewDetailPage() {
         <div className="space-y-8">
           {/* Query */}
           <section>
-            <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
               Query
             </h2>
-            <p className="rounded border-l-2 border-primary/30 bg-muted/50 p-3 font-mono text-sm">
+            <p className="rounded-sm border-l-4 border-primary bg-secondary/40 p-3 font-mono text-sm">
               {data.query_text}
             </p>
           </section>
 
           {/* Response */}
           <section>
-            <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
               Response
             </h2>
-            <div className="border-l-2 border-primary/30 pl-4 prose prose-sm max-w-none">
+            <div className="border-l-4 border-primary pl-4 prose prose-sm max-w-none">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {data.response_text ?? "*No response*"}
               </ReactMarkdown>
@@ -188,14 +188,14 @@ export default function ReviewDetailPage() {
           {/* References */}
           {data.references.length > 0 && (
             <section>
-              <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
                 References ({data.references.length})
               </h2>
               <ul className="space-y-2">
                 {data.references.map((ref, i) => (
                   <li
                     key={ref.id ?? i}
-                    className="flex items-start justify-between gap-2 rounded border p-2 text-sm"
+                    className="flex items-start justify-between gap-2 rounded-sm border border-l-4 border-l-primary/40 p-2 text-sm"
                   >
                     <div>
                       <p className="font-medium">
@@ -294,7 +294,7 @@ function EvaluationPanel({
             (key) => (
               <label
                 key={key}
-                className="flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 transition-colors hover:bg-muted/50"
+                className="flex cursor-pointer items-center gap-3 rounded-sm border px-3 py-2 transition-colors hover:bg-muted/50"
               >
                 <button
                   type="button"
@@ -318,7 +318,7 @@ function EvaluationPanel({
         </div>
 
         <div className="space-y-2">
-          <label className="text-sm font-medium">Notes</label>
+          <label className="text-sm font-bold">Notes</label>
           <Textarea
             placeholder="Optional notes about this evaluation..."
             value={note}
@@ -401,7 +401,7 @@ function ArticleEditor({
   return (
     <section>
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
           Article Editor
         </h2>
         {existing && (
@@ -418,7 +418,7 @@ function ArticleEditor({
 
       <div className="space-y-4">
         <div className="space-y-2">
-          <label className="text-sm font-medium">Title</label>
+          <label className="text-sm font-bold">Title</label>
           <Input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -427,7 +427,7 @@ function ArticleEditor({
         </div>
 
         <div className="space-y-2">
-          <label className="text-sm font-medium">Content</label>
+          <label className="text-sm font-bold">Content</label>
           <Textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}

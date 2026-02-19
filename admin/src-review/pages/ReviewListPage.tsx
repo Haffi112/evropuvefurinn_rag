@@ -93,7 +93,7 @@ export default function ReviewListPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Queries</h1>
+      <h1 className="text-3xl font-bold">Queries</h1>
 
       {/* Stats bar */}
       <div className="grid gap-4 sm:grid-cols-4">
@@ -105,7 +105,7 @@ export default function ReviewListPage() {
 
       {/* Filter tabs + search */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="flex gap-1 rounded-lg border bg-muted p-1">
+        <div className="flex gap-1 rounded-sm border bg-muted p-1">
           {STATUS_TABS.map((tab) => (
             <button
               key={tab}
@@ -113,9 +113,9 @@ export default function ReviewListPage() {
                 setStatusFilter(tab);
                 setPage(1);
               }}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+              className={`rounded-sm px-3 py-1.5 text-sm font-medium transition-colors ${
                 statusFilter === tab
-                  ? "bg-background text-foreground shadow-sm"
+                  ? "bg-background text-primary shadow-sm"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -236,14 +236,14 @@ function MiniStat({
   value: string | number;
 }) {
   return (
-    <Card>
+    <Card className="card-accent">
       <CardHeader className="pb-2">
-        <CardTitle className="text-xs font-medium text-muted-foreground">
+        <CardTitle className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
           {label}
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="text-xl font-bold">{value}</div>
+        <div className="text-xl font-bold text-primary">{value}</div>
       </CardContent>
     </Card>
   );

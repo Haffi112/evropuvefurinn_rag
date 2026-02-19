@@ -96,7 +96,7 @@ export default function ArticleFormPage() {
     const Component = multiline ? Textarea : Input;
     return (
       <div className="space-y-1">
-        <label className="text-sm font-medium">{label}</label>
+        <label className="text-sm font-bold">{label}</label>
         <Component
           value={form[key] as string}
           onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
@@ -108,11 +108,11 @@ export default function ArticleFormPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <h1 className="text-2xl font-semibold">
+      <h1 className="text-3xl font-bold">
         {isEdit ? "Edit Article" : "New Article"}
       </h1>
 
-      <Card>
+      <Card className="card-accent">
         <CardHeader>
           <CardTitle className="text-base">Article Details</CardTitle>
         </CardHeader>
@@ -126,7 +126,7 @@ export default function ArticleFormPage() {
             {field("date", "Date")}
             {field("author", "Author")}
             <div className="space-y-1">
-              <label className="text-sm font-medium">
+              <label className="text-sm font-bold">
                 Categories (comma separated)
               </label>
               <Input
@@ -135,7 +135,7 @@ export default function ArticleFormPage() {
               />
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium">
+              <label className="text-sm font-bold">
                 Tags (comma separated)
               </label>
               <Input
