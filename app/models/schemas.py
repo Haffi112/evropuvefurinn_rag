@@ -205,6 +205,12 @@ class AdminEvaluationListResponse(BaseModel):
     total_pages: int
 
 
+# ── Settings schemas ─────────────────────────────────────────
+
+class SettingUpdate(BaseModel):
+    value: str = Field(..., description="New value for the setting.")
+
+
 # ── Error schemas ────────────────────────────────────────────
 
 class ErrorDetail(BaseModel):

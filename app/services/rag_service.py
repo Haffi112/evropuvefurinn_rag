@@ -7,21 +7,11 @@ import uuid
 from app.config import Settings
 from app.db import queries as db
 from app.models.schemas import QueryResponse, Reference
+from app.services import settings_service
 from app.services.gemini_service import GeminiService
 from app.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
-
-DECLINE_IS = (
-    "Þessi spurning fellur utan efnissviðs Evrópuvefsins. "
-    "Evrópuvefurinn svarar spurningum um Evrópusambandið, EES og tengsl Íslands við Evrópu. "
-    "Vinsamlegast reyndu aftur með spurningu um þessi efni."
-)
-DECLINE_EN = (
-    "This question is outside the scope of Evrópuvefurinn. "
-    "Evrópuvefurinn answers questions about the European Union, EEA, and Iceland's relations with Europe. "
-    "Please try again with a question about these topics."
-)
 
 
 def _query_hash(query: str) -> str:
@@ -74,13 +64,15 @@ class RAGService:
         # Scope guard
         scope = await self._gemini.check_scope(query)
         if scope == "no":
-            decline = DECLINE_EN if language == "en" else DECLINE_IS
+            decline = (settings_service.get("prompt.decline_en") if language == "en"
+                       else settings_service.get("prompt.decline_is"))
+            flash_model = settings_service.get("model.flash_name")
             resp = QueryResponse(
                 query=query, answer=decline, references=[],
-                model_used=self._settings.gemini_flash_model,
+                model_used=flash_model,
                 cached=False, query_id=query_id, scope_declined=True,
             )
-            await self._log_query(query, decline, self._settings.gemini_flash_model,
+            await self._log_query(query, decline, flash_model,
                                   [], True, False, start_time, ip_address)
             return resp
 
@@ -88,15 +80,15 @@ class RAGService:
         matches = await self._embeddings.query(query, top_k=top_k)
         article_ids = [m["id"] for m in matches if m["score"] >= threshold]
         if not article_ids:
-            no_result = ("Engar greinar fundust í þekkingargrunni sem tengjast þessari spurningu."
-                         if language != "en"
-                         else "No articles found in the knowledge base related to this question.")
+            no_result = (settings_service.get("prompt.no_results_en") if language == "en"
+                         else settings_service.get("prompt.no_results_is"))
+            flash_model = settings_service.get("model.flash_name")
             resp = QueryResponse(
                 query=query, answer=no_result,
-                references=[], model_used=self._settings.gemini_flash_model,
+                references=[], model_used=flash_model,
                 cached=False, query_id=query_id,
             )
-            await self._log_query(query, no_result, self._settings.gemini_flash_model,
+            await self._log_query(query, no_result, flash_model,
                                   [], False, False, start_time, ip_address)
             return resp
 
@@ -175,18 +167,20 @@ class RAGService:
         # Scope guard
         scope = await self._gemini.check_scope(query)
         if scope == "no":
-            decline = DECLINE_EN if language == "en" else DECLINE_IS
+            decline = (settings_service.get("prompt.decline_en") if language == "en"
+                       else settings_service.get("prompt.decline_is"))
+            flash_model = settings_service.get("model.flash_name")
             for word in decline.split():
                 yield {"event": "token", "data": json.dumps({"text": word + " "})}
             yield {"event": "references", "data": json.dumps({"references": []})}
             yield {
                 "event": "done",
                 "data": json.dumps({
-                    "model_used": self._settings.gemini_flash_model,
+                    "model_used": flash_model,
                     "cached": False, "query_id": query_id, "scope_declined": True,
                 }),
             }
-            await self._log_query(query, decline, self._settings.gemini_flash_model,
+            await self._log_query(query, decline, flash_model,
                                   [], True, False, start_time, ip_address)
             return
 
@@ -201,9 +195,8 @@ class RAGService:
         }
 
         if not article_ids:
-            no_result = ("No articles found related to this question."
-                         if language == "en"
-                         else "Engar greinar fundust sem tengjast þessari spurningu.")
+            no_result = (settings_service.get("prompt.no_results_en") if language == "en"
+                         else settings_service.get("prompt.no_results_is"))
             yield {"event": "token", "data": json.dumps({"text": no_result})}
             yield {"event": "references", "data": json.dumps({"references": []})}
             yield {

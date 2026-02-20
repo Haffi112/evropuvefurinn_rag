@@ -1,19 +1,16 @@
 import json
 import logging
 import re
-from pathlib import Path
 
-import yaml
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
 from app.config import Settings
 from app.db import queries as db
+from app.services import settings_service
 
 logger = logging.getLogger(__name__)
-
-PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
 
 
 class GeminiResponse(BaseModel):
@@ -25,21 +22,10 @@ class GeminiService:
     def __init__(self, settings: Settings):
         self._settings = settings
         self._client: genai.Client | None = None
-        self._system_prompt: str | None = None
-        self._scope_guard_prompt: str | None = None
 
     async def initialize(self) -> None:
         self._client = genai.Client(api_key=self._settings.gemini_api_key)
-        self._load_prompts()
         logger.info("GeminiService initialized")
-
-    def _load_prompts(self) -> None:
-        with open(PROMPTS_DIR / "system_prompt.yaml") as f:
-            data = yaml.safe_load(f)
-            self._system_prompt = data["system"]
-        with open(PROMPTS_DIR / "scope_guard.yaml") as f:
-            data = yaml.safe_load(f)
-            self._scope_guard_prompt = data["task"]
 
     async def close(self) -> None:
         self._client = None
@@ -49,9 +35,11 @@ class GeminiService:
 
     async def check_scope(self, query: str) -> str:
         """Returns 'yes', 'adjacent', or 'no'. Always uses Flash (no Pro quota)."""
+        scope_prompt = settings_service.get("prompt.scope_guard")
+        flash_model = settings_service.get("model.flash_name")
         response = await self._client.aio.models.generate_content(
-            model=self._settings.gemini_flash_model,
-            contents=f"{self._scope_guard_prompt}\n\nQuestion: {query}",
+            model=flash_model,
+            contents=f"{scope_prompt}\n\nQuestion: {query}",
             config=types.GenerateContentConfig(temperature=0),
         )
         result = response.text.strip().lower()
@@ -64,12 +52,15 @@ class GeminiService:
 
     async def select_model(self) -> str:
         """Check Pro quota; return Pro model name if under limit, else Flash."""
+        pro_limit = settings_service.get_int("model.pro_daily_limit")
+        pro_name = settings_service.get("model.pro_name")
+        flash_name = settings_service.get("model.flash_name")
         pro_count = await db.quota_get("pro")
-        if pro_count < self._settings.gemini_pro_daily_limit:
-            return self._settings.gemini_pro_model
+        if pro_count < pro_limit:
+            return pro_name
         logger.info("Pro quota exhausted (%d/%d), falling back to Flash",
-                     pro_count, self._settings.gemini_pro_daily_limit)
-        return self._settings.gemini_flash_model
+                     pro_count, pro_limit)
+        return flash_name
 
     # ── Generation ───────────────────────────────────────────
 
@@ -86,10 +77,11 @@ class GeminiService:
         context = "\n---\n".join(parts)
         lang_instruction = ""
         if language == "en":
-            lang_instruction = "\n\nIMPORTANT: The user's question is in English. Respond in English."
+            lang_instruction = settings_service.get("prompt.lang_override_en")
         elif language == "is":
-            lang_instruction = "\n\nMIKILVÆGT: Spurning notandans er á íslensku. Svaraðu á íslensku."
-        return f"## Greinar úr þekkingargrunni\n\n{context}{lang_instruction}"
+            lang_instruction = settings_service.get("prompt.lang_override_is")
+        header = settings_service.get("prompt.context_header")
+        return f"{header}\n\n{context}{lang_instruction}"
 
     async def generate_stream(
         self, query: str, articles: list[dict], language: str = "auto",
@@ -107,14 +99,14 @@ class GeminiService:
         user_content = f"{context}\n\n## Spurning notanda\n{query}"
 
         config = types.GenerateContentConfig(
-            system_instruction=self._system_prompt,
-            temperature=0.3,
+            system_instruction=settings_service.get("prompt.system"),
+            temperature=settings_service.get_float("model.temperature"),
             response_mime_type="application/json",
             response_schema=GeminiResponse,
         )
         if include_thinking:
             config.thinking_config = types.ThinkingConfig(
-                thinking_budget=4096,
+                thinking_budget=settings_service.get_int("model.thinking_budget"),
                 include_thoughts=True,
             )
 
@@ -221,14 +213,14 @@ class GeminiService:
         user_content = f"{context}\n\n## Spurning notanda\n{query}"
 
         config = types.GenerateContentConfig(
-            system_instruction=self._system_prompt,
-            temperature=0.3,
+            system_instruction=settings_service.get("prompt.system"),
+            temperature=settings_service.get_float("model.temperature"),
             response_mime_type="application/json",
             response_schema=GeminiResponse,
         )
         if include_thinking:
             config.thinking_config = types.ThinkingConfig(
-                thinking_budget=4096,
+                thinking_budget=settings_service.get_int("model.thinking_budget"),
                 include_thoughts=True,
             )
 

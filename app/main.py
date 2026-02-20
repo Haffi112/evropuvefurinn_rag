@@ -11,9 +11,11 @@ from app.config import get_settings
 from app.db.database import close_pool, init_pool
 from app.middleware.rate_limit import setup_rate_limiting
 from app.routers import admin, articles, health, query, review
+from app.routers import settings as settings_router
 from app.services.gemini_service import GeminiService
 from app.services.embedding_service import EmbeddingService
 from app.services.rag_service import RAGService
+from app.services import settings_service
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,10 @@ async def lifespan(app: FastAPI):
 
     # Start database
     await init_pool(settings.database_url)
+
+    # Load runtime settings
+    settings_service.init_defaults(settings)
+    await settings_service.load_cache()
 
     # Start Embeddings
     emb = EmbeddingService(settings)
@@ -137,6 +143,7 @@ def create_app() -> FastAPI:
     app.include_router(query.router)
     app.include_router(admin.router)
     app.include_router(review.router)
+    app.include_router(settings_router.router)
 
     # Admin SPA static assets (only mount if directory exists)
     assets_dir = STATIC_DIR / "assets"

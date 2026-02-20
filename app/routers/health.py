@@ -9,6 +9,7 @@ from app.db import queries as db
 from app.db.database import get_pool
 from app.middleware.auth import verify_api_key
 from app.models.schemas import HealthResponse, StatsResponse
+from app.services import settings_service
 from app.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
@@ -111,7 +112,7 @@ async def stats(request: Request):
         quota={
             "gemini_3_pro": {
                 "used": pro_used,
-                "limit": settings.gemini_pro_daily_limit,
+                "limit": settings_service.get_int("model.pro_daily_limit"),
                 "resets_at": tomorrow.isoformat(),
             },
             "gemini_3_flash": {
