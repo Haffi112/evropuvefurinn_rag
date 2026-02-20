@@ -1,7 +1,7 @@
 import logging
 import time
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
 from app.middleware.rate_limit import limiter
@@ -36,6 +36,7 @@ async def query_endpoint(request: Request, body: QueryRequest):
     rag = _get_rag(request)
     ip_address = request.client.host if request.client else None
     start_time = time.monotonic()
+    logger.info("Query received: stream=%s lang=%s ip=%s", body.stream, body.language, ip_address)
 
     if body.stream:
         return EventSourceResponse(
@@ -47,10 +48,14 @@ async def query_endpoint(request: Request, body: QueryRequest):
             )
         )
 
-    response = await rag.process_query_json(
-        body.query, body.top_k, body.language,
-        ip_address=ip_address, start_time=start_time,
-        score_threshold=body.score_threshold,
-        include_thinking=body.include_thinking,
-    )
+    try:
+        response = await rag.process_query_json(
+            body.query, body.top_k, body.language,
+            ip_address=ip_address, start_time=start_time,
+            score_threshold=body.score_threshold,
+            include_thinking=body.include_thinking,
+        )
+    except Exception:
+        logger.error("Non-streaming query failed", exc_info=True)
+        raise HTTPException(status_code=500, detail="Villa kom upp við úrvinnslu fyrirspurnar.")
     return response
