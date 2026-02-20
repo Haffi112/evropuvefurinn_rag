@@ -4,6 +4,7 @@ import re
 
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 from pydantic import BaseModel
 
 from app.config import Settings
@@ -31,17 +32,38 @@ class GeminiService:
         self._client = None
         logger.info("GeminiService closed")
 
+    # ── Fallback helper ────────────────────────────────────────
+
+    def _fallback_model(self, failed_model: str, kind: str = "pro") -> str | None:
+        """Return the config.py default model if it differs from *failed_model*."""
+        key = f"model.{kind}_name"
+        default = settings_service._registry[key].default
+        if default and default != failed_model:
+            return default
+        return None
+
     # ── Scope guard ──────────────────────────────────────────
 
     async def check_scope(self, query: str) -> str:
         """Returns 'yes', 'adjacent', or 'no'. Always uses Flash (no Pro quota)."""
         scope_prompt = settings_service.get("prompt.scope_guard")
         flash_model = settings_service.get("model.flash_name")
-        response = await self._client.aio.models.generate_content(
-            model=flash_model,
-            contents=f"{scope_prompt}\n\nQuestion: {query}",
-            config=types.GenerateContentConfig(temperature=0),
-        )
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=flash_model,
+                contents=f"{scope_prompt}\n\nQuestion: {query}",
+                config=types.GenerateContentConfig(temperature=0),
+            )
+        except APIError:
+            fallback = self._fallback_model(flash_model, "flash")
+            if fallback is None:
+                raise
+            logger.warning("Gemini API error with model %r, retrying with %r", flash_model, fallback)
+            response = await self._client.aio.models.generate_content(
+                model=fallback,
+                contents=f"{scope_prompt}\n\nQuestion: {query}",
+                config=types.GenerateContentConfig(temperature=0),
+            )
         result = response.text.strip().lower()
         if result not in ("yes", "adjacent", "no"):
             logger.warning("Scope guard returned unexpected value: %s, defaulting to 'adjacent'", result)
@@ -110,11 +132,24 @@ class GeminiService:
                 include_thoughts=True,
             )
 
-        stream = await self._client.aio.models.generate_content_stream(
-            model=model,
-            contents=user_content,
-            config=config,
-        )
+        try:
+            stream = await self._client.aio.models.generate_content_stream(
+                model=model,
+                contents=user_content,
+                config=config,
+            )
+        except APIError:
+            kind = "pro" if "pro" in model.lower() else "flash"
+            fallback = self._fallback_model(model, kind)
+            if fallback is None:
+                raise
+            logger.warning("Gemini API error with model %r, retrying stream with %r", model, fallback)
+            model = fallback
+            stream = await self._client.aio.models.generate_content_stream(
+                model=model,
+                contents=user_content,
+                config=config,
+            )
 
         async def text_iterator():
             json_buffer = []  # accumulate full JSON for final parse
@@ -224,11 +259,24 @@ class GeminiService:
                 include_thoughts=True,
             )
 
-        response = await self._client.aio.models.generate_content(
-            model=model,
-            contents=user_content,
-            config=config,
-        )
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=model,
+                contents=user_content,
+                config=config,
+            )
+        except APIError:
+            kind = "pro" if "pro" in model.lower() else "flash"
+            fallback = self._fallback_model(model, kind)
+            if fallback is None:
+                raise
+            logger.warning("Gemini API error with model %r, retrying with %r", model, fallback)
+            model = fallback
+            response = await self._client.aio.models.generate_content(
+                model=model,
+                contents=user_content,
+                config=config,
+            )
 
         # Extract thinking parts if requested
         thinking_text: str | None = None

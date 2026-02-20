@@ -1,10 +1,13 @@
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.middleware.auth import verify_api_key
 from app.models.schemas import SettingUpdate
 from app.services import settings_service
+
+_MODEL_NAME_RE = re.compile(r"^gemini-[\w][\w.\-]{2,80}$")
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +38,18 @@ async def update_setting(key: str, body: SettingUpdate):
                 raise HTTPException(
                     status_code=422,
                     detail=f"Setting '{key}' requires a numeric value",
+                )
+
+        # Validate model name fields
+        if key in ("model.pro_name", "model.flash_name"):
+            if not _MODEL_NAME_RE.match(body.value):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Invalid model name '{body.value}'. "
+                        "Must match pattern: gemini-<name> "
+                        "(letters, digits, dots, hyphens; 3-81 chars after 'gemini-')"
+                    ),
                 )
 
         await settings_service.set_value(key, body.value)
