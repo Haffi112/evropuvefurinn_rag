@@ -110,12 +110,12 @@ async def stats(request: Request):
             "cache_hit_rate": cache_rate,
         },
         quota={
-            "gemini_3_pro": {
+            settings_service.get("model.pro_name"): {
                 "used": pro_used,
                 "limit": settings_service.get_int("model.pro_daily_limit"),
                 "resets_at": tomorrow.isoformat(),
             },
-            "gemini_3_flash": {
+            settings_service.get("model.flash_name"): {
                 "used": flash_used,
                 "limit": None,
             },
