@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS articles (
     answer      TEXT NOT NULL,
     source_url  TEXT NOT NULL,
     date        TEXT NOT NULL,
-    author      TEXT NOT NULL,
+    author      TEXT,
     categories  TEXT[] NOT NULL DEFAULT '{}',
     tags        TEXT[] NOT NULL DEFAULT '{}',
     embedding   vector(1024),
@@ -117,6 +117,8 @@ CREATE INDEX IF NOT EXISTS idx_articles_embedding_hnsw
     WITH (m = 16, ef_construction = 64);
 
 ALTER TABLE query_log ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'pending';
+
+ALTER TABLE articles ALTER COLUMN author DROP NOT NULL;
 """
 
 

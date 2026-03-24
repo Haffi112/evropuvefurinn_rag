@@ -12,7 +12,7 @@ from app.db.database import close_pool, init_pool
 from app.middleware.rate_limit import setup_rate_limiting
 from app.routers import admin, articles, health, query, review
 from app.routers import settings as settings_router
-from app.services.gemini_service import GeminiService
+from app.services.llm_service import LLMService
 from app.services.embedding_service import EmbeddingService
 from app.services.rag_service import RAGService
 from app.services import settings_service
@@ -41,19 +41,19 @@ async def lifespan(app: FastAPI):
     await emb.initialize()
     app.state.embeddings = emb
 
-    # Start Gemini
-    gemini = GeminiService(settings)
-    await gemini.initialize()
+    # Start LLM (OpenRouter)
+    llm = LLMService(settings)
+    await llm.initialize()
 
     # Start RAG orchestrator
-    rag = RAGService(settings, emb, gemini)
+    rag = RAGService(settings, emb, llm)
     app.state.rag = rag
 
     logger.info("Application started (env=%s)", settings.app_env)
     yield
 
     # Shutdown
-    await gemini.close()
+    await llm.close()
     await emb.close()
     await close_pool()
     logger.info("Application shut down")
@@ -93,7 +93,7 @@ and Iceland's relationship with it, backed by a curated knowledge base of ~670 a
 
 - **Semantic search** — queries are embedded with `multilingual-e5-large` via DeepInfra
   and matched against article vectors stored in pgvector.
-- **AI-generated answers** — matched articles are passed to Google Gemini (Pro or Flash)
+- **AI-generated answers** — matched articles are passed to an LLM via OpenRouter (Pro or Flash)
   to produce grounded, referenced answers in Icelandic or English.
 - **Streaming** — the `/query` endpoint supports Server-Sent Events (SSE) for
   real-time token streaming.
@@ -102,8 +102,9 @@ and Iceland's relationship with it, backed by a curated knowledge base of ~670 a
 
 ## Authentication
 
-Protected endpoints (article writes, stats, admin) require an **API key** sent in the
-`X-API-Key` header. Use the **Authorize** button above to enter your key.
+Protected endpoints (article writes, stats, admin) require an **API key** sent as a
+Bearer token in the `Authorization` header (`Authorization: Bearer <key>`).
+Use the **Authorize** button above to enter your key.
 
 ## Rate limits
 

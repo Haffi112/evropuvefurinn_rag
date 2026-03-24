@@ -1,16 +1,31 @@
 # Evrópuvefurinn API
 
-Middleware and RAG backend for [Evrópuvefurinn](https://evropuvefur.is) — an Icelandic-language Q&A site about the European Union. The API stores ~670 articles in PostgreSQL, indexes them in Pinecone for semantic search, and uses Google Gemini to generate answers grounded in retrieved content.
+RAG backend for [Evrópuvefurinn](https://evropuvefur.is) — an Icelandic-language Q&A site about the European Union, run by the University of Iceland. The API stores ~670 articles in PostgreSQL with pgvector for semantic search, embeds queries via DeepInfra (multilingual-e5-large, 1024 dims), and generates AI answers via OpenRouter with SSE streaming. Includes an admin dashboard and human review interface built with React.
 
-**Stack:** FastAPI, asyncpg, Pinecone (multilingual-e5-large, 1024 dims), Google Gemini 3 Pro/Flash, SSE streaming.
+**Stack:** FastAPI, asyncpg, pgvector (multilingual-e5-large via DeepInfra, 1024 dims), OpenRouter (Gemini Pro/Flash), SSE streaming, React + Tailwind CSS + Radix UI admin/review UI.
+
+## Features
+
+- Semantic vector search (pgvector HNSW index + DeepInfra embeddings)
+- AI-generated answers (via OpenRouter) with source citations
+- SSE streaming responses
+- Scope guard (rejects off-topic queries via Flash model)
+- Query caching (PostgreSQL, configurable TTL)
+- Daily model quota with automatic fallback (Pro → Flash)
+- Admin dashboard (React + Tailwind + Radix UI)
+- Human review/evaluation interface with JWT authentication
+- Runtime-configurable models, prompts, and limits
+- Rate limiting (per-IP)
+- Full query audit logging with analytics
 
 ## Prerequisites
 
 - Python 3.12+
-- PostgreSQL 15+
-- [Pinecone](https://pinecone.io) account (free tier works)
-- [Google AI Studio](https://aistudio.google.com) API key (Gemini)
+- PostgreSQL 15+ with pgvector extension
+- Node.js 20+ (for building admin UI)
 - [uv](https://docs.astral.sh/uv/) package manager
+- [DeepInfra](https://deepinfra.com) API key (for embeddings)
+- [OpenRouter](https://openrouter.ai) API key (for LLM)
 
 ## Local Setup
 
@@ -27,21 +42,17 @@ uv pip install -e ".[dev]"
 
 # 4. Configure environment
 cp .env.template .env
-# Edit .env — fill in PINECONE_API_KEY, GEMINI_API_KEY, CMS_API_KEY, DATABASE_URL
+# Edit .env — fill in DEEPINFRA_API_KEY, OPEN_ROUTER_API_KEY, CMS_API_KEY, DATABASE_URL, REVIEW_JWT_SECRET
 
 # 5. Start PostgreSQL
 brew services start postgresql    # macOS
 # or: docker run -d --name pg -p 5432:5432 -e POSTGRES_DB=evropuvefur -e POSTGRES_PASSWORD=pass postgres:15
 
-# 6. Create database
+# 6. Create database (pgvector extension is created automatically on first run)
 createdb evropuvefur
 
-# 7. Create Pinecone index (one-time)
-# In Pinecone console: create serverless index
-#   Name: evropuvefur
-#   Dimensions: 1024
-#   Metric: cosine
-#   Cloud: aws, Region: eu-west-1
+# 7. Build admin UI
+cd admin && npm ci && npm run build && cd ..
 
 # 8. Start the API (tables auto-created on first run)
 uvicorn app.main:app --reload
@@ -55,21 +66,73 @@ curl http://localhost:8000/api/v1/health
 
 ## API Endpoints
 
-All endpoints are prefixed with `/api/v1`. Endpoints marked with a key require the `X-API-Key` header.
+All endpoints are prefixed with `/api/v1`.
 
-| Method   | Path                       | Auth | Description                          |
-|----------|----------------------------|------|--------------------------------------|
-| `GET`    | `/health`                  |      | Health check (Postgres, Pinecone, Gemini) |
-| `GET`    | `/stats`                   | key  | Dashboard stats and quota info       |
-| `GET`    | `/articles`                |      | List articles (paginated)            |
-| `GET`    | `/articles/{article_id}`   |      | Get single article                   |
-| `POST`   | `/articles`                | key  | Create article                       |
-| `PUT`    | `/articles/{article_id}`   | key  | Update article                       |
-| `DELETE` | `/articles/{article_id}`   | key  | Delete article                       |
-| `POST`   | `/articles/bulk`           | key  | Bulk upsert articles (max 100/batch) |
-| `POST`   | `/query`                   |      | RAG query (supports SSE streaming)   |
+**Auth types:** `none` = public, `API key` = `Authorization: Bearer <CMS_API_KEY>`, `JWT` = reviewer Bearer token from `/review/auth/login`.
 
-### Query example
+### Health & Stats
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/health` | none | Health check (Postgres, embeddings, LLM) |
+| `GET` | `/stats` | API key | Dashboard stats, quota info, vector index stats |
+
+### Articles
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/articles` | none | List articles (paginated) |
+| `GET` | `/articles/{id}` | none | Get single article |
+| `POST` | `/articles` | API key | Create article |
+| `PUT` | `/articles/{id}` | API key | Update article |
+| `DELETE` | `/articles/{id}` | API key | Delete article |
+| `POST` | `/articles/bulk` | API key | Bulk upsert (max 100/batch) |
+
+### Query (RAG)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/query` | none | Ask a question (supports SSE streaming) |
+
+### Admin
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/admin/query-log` | API key | Paginated, filterable query logs |
+| `GET` | `/admin/query-log/stats` | API key | Aggregate query statistics |
+| `PATCH` | `/admin/query-log/{id}/review-status` | API key | Set review status for a query |
+| `POST` | `/admin/reviewers` | API key | Create reviewer account |
+| `GET` | `/admin/reviewers` | API key | List all reviewers |
+| `DELETE` | `/admin/reviewers/{id}` | API key | Deactivate a reviewer |
+| `PUT` | `/admin/reviewers/{id}/reset-password` | API key | Reset reviewer password |
+| `GET` | `/admin/reviews` | API key | List all evaluations (paginated) |
+| `GET` | `/admin/reviews/export/csv` | API key | Export evaluations as CSV |
+| `GET` | `/admin/reviews/export/articles` | API key | Export reviewed articles as ZIP |
+| `GET` | `/admin/reviews/export/all` | API key | Export all data as ZIP |
+
+### Review
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/review/auth/login` | none | Reviewer login (returns JWT) |
+| `GET` | `/review/queries` | JWT | List queries for review |
+| `GET` | `/review/queries/{id}` | JWT | Get query detail |
+| `POST` | `/review/queries/{id}/evaluate` | JWT | Submit evaluation checklist |
+| `POST` | `/review/queries/{id}/article` | JWT | Save edited article draft |
+| `GET` | `/review/queries/{id}/article` | JWT | Get latest article draft |
+| `GET` | `/review/queries/{id}/export/{fmt}` | JWT | Export article as .md or .docx |
+
+### Settings
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/admin/settings/` | API key | List all runtime settings |
+| `PUT` | `/admin/settings/{key}` | API key | Update a setting |
+| `DELETE` | `/admin/settings/{key}` | API key | Reset a setting to default |
+
+## Query Example
+
+**JSON response:**
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/query \
@@ -77,88 +140,111 @@ curl -X POST http://localhost:8000/api/v1/query \
   -d '{"query": "Hvað er ESB?", "stream": false}'
 ```
 
-## Seeding Data
+**SSE streaming:**
 
-The seed script loads all ~670 articles from the prototype's JSON dataset into the running API:
+```bash
+curl -N -X POST http://localhost:8000/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Hvað er ESB?", "stream": true}'
+```
+
+SSE events: `references` (sources found), `chunk` (answer tokens), `done` (final metadata).
+
+## Architecture
+
+The RAG pipeline follows these steps for each query:
+
+```
+1. Cache check     → Return cached response if fresh hit
+2. Scope guard     → Flash model classifies query as EU-related or off-topic
+3. Embed query     → DeepInfra multilingual-e5-large → 1024-dim vector
+4. Vector search   → pgvector HNSW cosine similarity → top-K articles
+5. Fetch articles  → Load full article content from PostgreSQL
+6. Generate answer → Pro model (or Flash if quota exceeded) via OpenRouter with article context
+7. Cache + log     → Store response in cache, write to query_log
+```
+
+## Admin & Review UI
+
+The admin and review interfaces are single-page apps served by the API.
+
+**Build:**
+
+```bash
+cd admin && npm ci && npm run build
+```
+
+This outputs to `app/static/admin/` which the API serves automatically.
+
+**Access:**
+- Admin dashboard: `/admin` (uses API key auth)
+- Review interface: `/review` (uses JWT auth)
+
+**Tech:** React 19, TypeScript, Vite, Tailwind CSS 4, Radix UI, TanStack Query.
+
+## Seeding Data
 
 ```bash
 # Uses defaults: --api-url http://localhost:8000, reads CMS_API_KEY from .env
 python scripts/seed_articles.py
 
-# Or override:
-python scripts/seed_articles.py --api-url https://your-api.onrender.com --api-key your-key
+# Override for remote API:
+python scripts/seed_articles.py --api-url https://your-api.example.com --api-key your-key
 ```
 
-The existing `scripts/migrate_articles.py` is available for production use with explicit flags.
-
-## Render Deployment
-
-### 1. Create services
-
-Use the **render.yaml** Blueprint (recommended) or set up manually:
-
-**Option A — Blueprint:**
-Push this repo to GitHub, then in Render Dashboard → **New** → **Blueprint** → select the repo. Render reads `render.yaml` and creates the web service + database.
-
-**Option B — Manual setup:**
-
-1. **Web Service:** New Web Service → Python → connect your repo
-   - Root directory: `evropuvefur_api`
-   - Build command: `pip install .`
-   - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-
-2. **PostgreSQL:** New PostgreSQL → name it `evropuvefur-db` (starter plan)
-
-### 2. Environment variables
-
-In the web service settings, add:
-
-| Variable              | Value                                              |
-|-----------------------|----------------------------------------------------|
-| `DATABASE_URL`        | Internal connection string from Render PostgreSQL   |
-| `PINECONE_API_KEY`    | Your Pinecone API key                              |
-| `PINECONE_INDEX_NAME` | `evropuvefur`                                      |
-| `GEMINI_API_KEY`      | Your Google AI Studio key                          |
-| `CMS_API_KEY`         | A strong secret for article management             |
-| `APP_ENV`             | `production`                                       |
-| `CORS_ALLOWED_ORIGINS`| `https://www.evropuvefur.is,https://evropuvefur.is`|
-
-### 3. Health check
-
-Set the health check path to `/api/v1/health` in the web service settings.
-
-### 4. Seed production data
-
-After deployment, seed articles from your local machine:
+To re-index embeddings (e.g. after changing the embedding model):
 
 ```bash
-python scripts/seed_articles.py \
-  --api-url https://your-api.onrender.com \
-  --api-key your-production-cms-api-key
+python scripts/backfill_embeddings.py
+```
+
+## Deployment
+
+### University server (primary)
+
+The API runs on `evropa.rhi.hi.is` as a systemd service.
+
+**Service:** `evropuvefur-api.service`
+
+**Update procedure:**
+
+```bash
+git pull
+pip install .
+cd admin && npm ci && npm run build && cd ..
+sudo systemctl restart evropuvefur-api
 ```
 
 ## Environment Variables
 
 Full reference (see `.env.template`):
 
-| Variable               | Default                    | Description                              |
-|------------------------|----------------------------|------------------------------------------|
-| `APP_ENV`              | `development`              | Environment name                         |
-| `APP_VERSION`          | `1.0.0`                    | Reported in health check                 |
-| `LOG_LEVEL`            | `info`                     | Python log level                         |
-| `CMS_API_KEY`          | `change-me-to-a-secret`    | API key for article management endpoints |
-| `DATABASE_URL`         | `postgresql://...`         | PostgreSQL connection string             |
-| `PINECONE_API_KEY`     |                            | Pinecone API key                         |
-| `PINECONE_INDEX_NAME`  | `evropuvefur`              | Pinecone index name                      |
-| `PINECONE_CLOUD`       | `aws`                      | Pinecone cloud provider                  |
-| `PINECONE_REGION`      | `eu-west-1`                | Pinecone region                          |
-| `GEMINI_API_KEY`       |                            | Google AI Studio API key                 |
-| `GEMINI_PRO_MODEL`     | `gemini-3-pro-preview`     | Model for complex queries                |
-| `GEMINI_FLASH_MODEL`   | `gemini-3-flash-preview`   | Model for simple queries                 |
-| `GEMINI_PRO_DAILY_LIMIT`| `200`                    | Daily Pro model request cap              |
-| `CORS_ALLOWED_ORIGINS` | `https://www.evropuvefur.is,...` | Comma-separated allowed origins    |
-| `QUERY_RATE_LIMIT`     | `10/minute`                | Rate limit for /query                    |
-| `SYNC_RATE_LIMIT`      | `100/minute`               | Rate limit for article endpoints         |
-| `QUERY_CACHE_TTL_HOURS`| `24`                       | Query cache time-to-live                 |
-| `RAG_TOP_K`            | `5`                        | Number of articles retrieved per query   |
-| `RAG_SCORE_THRESHOLD`  | `0.3`                      | Minimum similarity score for retrieval   |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `APP_ENV` | `development` | Environment name |
+| `APP_VERSION` | `1.0.0` | Reported in health check |
+| `LOG_LEVEL` | `info` | Python log level |
+| `CMS_API_KEY` | `change-me-to-a-secret` | API key for protected endpoints |
+| `REVIEW_JWT_SECRET` | `change-me` | Secret for reviewer JWT tokens |
+| `DATABASE_URL` | `postgresql://...` | PostgreSQL connection string |
+| `DEEPINFRA_API_KEY` | | DeepInfra API key (for embeddings) |
+| `DEEPINFRA_MODEL` | `intfloat/multilingual-e5-large` | Embedding model |
+| `OPEN_ROUTER_API_KEY` | | OpenRouter API key (for LLM) |
+| `LLM_PRO_MODEL` | `google/gemini-3.1-pro-preview` | Model for complex queries |
+| `LLM_FLASH_MODEL` | `google/gemini-3-flash-preview` | Model for scope guard + fallback |
+| `LLM_PRO_DAILY_LIMIT` | `200` | Daily Pro model request cap |
+| `CORS_ALLOWED_ORIGINS` | `https://www.evropuvefur.is,...` | Comma-separated allowed origins |
+| `QUERY_RATE_LIMIT` | `10/minute` | Rate limit for /query |
+| `SYNC_RATE_LIMIT` | `100/minute` | Rate limit for article endpoints |
+| `QUERY_CACHE_TTL_HOURS` | `24` | Query cache time-to-live |
+| `RAG_TOP_K` | `5` | Number of articles retrieved per query |
+| `RAG_SCORE_THRESHOLD` | `0.3` | Minimum similarity score for retrieval |
+
+## Rate Limiting
+
+Rate limits are enforced per IP address using [slowapi](https://github.com/laurentS/slowapi):
+
+| Endpoint group | Limit |
+|----------------|-------|
+| `/query` | 10 req/min |
+| All other endpoints | 100 req/min |

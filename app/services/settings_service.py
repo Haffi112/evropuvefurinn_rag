@@ -36,12 +36,12 @@ def _build_registry() -> dict[str, SettingMeta]:
     return {
         "model.pro_name": SettingMeta(
             label="Pro Model Name",
-            description="Gemini Pro model identifier",
+            description="Pro model identifier (OpenRouter format, e.g. google/gemini-...)",
             category="model", default="", input_type="text",
         ),
         "model.flash_name": SettingMeta(
             label="Flash Model Name",
-            description="Gemini Flash model identifier",
+            description="Flash model identifier (OpenRouter format, e.g. google/gemini-...)",
             category="model", default="", input_type="text",
         ),
         "model.pro_daily_limit": SettingMeta(
@@ -135,9 +135,9 @@ def init_defaults(settings) -> None:
     _registry = _build_registry()
 
     # Override defaults from Settings (env vars)
-    _registry["model.pro_name"].default = settings.gemini_pro_model
-    _registry["model.flash_name"].default = settings.gemini_flash_model
-    _registry["model.pro_daily_limit"].default = str(settings.gemini_pro_daily_limit)
+    _registry["model.pro_name"].default = settings.llm_pro_model
+    _registry["model.flash_name"].default = settings.llm_flash_model
+    _registry["model.pro_daily_limit"].default = str(settings.llm_pro_daily_limit)
 
     # Override defaults from YAML files
     try:

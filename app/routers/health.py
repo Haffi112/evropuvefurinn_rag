@@ -26,7 +26,7 @@ def _get_embeddings(request: Request) -> EmbeddingService:
     response_model=HealthResponse,
     summary="Health check",
     description="Returns the status of each backing service (Postgres, embeddings, "
-    "Gemini). Returns 200 if all healthy, 503 if any service is degraded.",
+    "LLM). Returns 200 if all healthy, 503 if any service is degraded.",
 )
 async def health_check(request: Request):
     settings = get_settings()
@@ -55,9 +55,9 @@ async def health_check(request: Request):
         checks["embeddings"] = "unavailable"
         all_healthy = False
 
-    # Gemini (basic check — just verify key is set)
-    checks["gemini"] = "available" if settings.gemini_api_key else "not_configured"
-    if not settings.gemini_api_key:
+    # LLM / OpenRouter (basic check — just verify key is set)
+    checks["llm"] = "available" if settings.open_router_api_key else "not_configured"
+    if not settings.open_router_api_key:
         all_healthy = False
 
     status_code = 200 if all_healthy else 503
@@ -77,7 +77,7 @@ async def health_check(request: Request):
     dependencies=[Depends(verify_api_key)],
     summary="Usage statistics",
     description="Returns article counts, today's query volume, cache hit rate, "
-    "Gemini quota usage (Pro/Flash), and vector index statistics.",
+    "LLM quota usage (Pro/Flash), and vector index statistics.",
 )
 async def stats(request: Request):
     settings = get_settings()

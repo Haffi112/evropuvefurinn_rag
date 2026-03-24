@@ -2,9 +2,7 @@ import json
 import logging
 import re
 
-from google import genai
-from google.genai import types
-from google.genai.errors import APIError
+from openai import AsyncOpenAI, APIError
 from pydantic import BaseModel
 
 from app.config import Settings
@@ -13,24 +11,35 @@ from app.services import settings_service
 
 logger = logging.getLogger(__name__)
 
+JSON_FORMAT_INSTRUCTION = (
+    "\n\nYou MUST respond with valid JSON matching this exact schema and nothing else:\n"
+    '{"answer": "<markdown string>", "references_used": ["<article_id>", ...]}'
+)
 
-class GeminiResponse(BaseModel):
+
+class LLMResponse(BaseModel):
     answer: str  # Markdown-formatted answer
     references_used: list[str]  # Article IDs the model actually cited
 
 
-class GeminiService:
+class LLMService:
     def __init__(self, settings: Settings):
         self._settings = settings
-        self._client: genai.Client | None = None
+        self._client: AsyncOpenAI | None = None
 
     async def initialize(self) -> None:
-        self._client = genai.Client(api_key=self._settings.gemini_api_key)
-        logger.info("GeminiService initialized")
+        self._client = AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=self._settings.open_router_api_key,
+            default_headers={"HTTP-Referer": "https://evropuvefur.is"},
+        )
+        logger.info("LLMService initialized (OpenRouter)")
 
     async def close(self) -> None:
+        if self._client:
+            await self._client.close()
         self._client = None
-        logger.info("GeminiService closed")
+        logger.info("LLMService closed")
 
     # ── Fallback helper ────────────────────────────────────────
 
@@ -49,22 +58,22 @@ class GeminiService:
         scope_prompt = settings_service.get("prompt.scope_guard")
         flash_model = settings_service.get("model.flash_name")
         try:
-            response = await self._client.aio.models.generate_content(
+            response = await self._client.chat.completions.create(
                 model=flash_model,
-                contents=f"{scope_prompt}\n\nQuestion: {query}",
-                config=types.GenerateContentConfig(temperature=0),
+                messages=[{"role": "user", "content": f"{scope_prompt}\n\nQuestion: {query}"}],
+                temperature=0,
             )
         except APIError:
             fallback = self._fallback_model(flash_model, "flash")
             if fallback is None:
                 raise
-            logger.warning("Gemini API error with model %r, retrying with %r", flash_model, fallback)
-            response = await self._client.aio.models.generate_content(
+            logger.warning("LLM API error with model %r, retrying with %r", flash_model, fallback)
+            response = await self._client.chat.completions.create(
                 model=fallback,
-                contents=f"{scope_prompt}\n\nQuestion: {query}",
-                config=types.GenerateContentConfig(temperature=0),
+                messages=[{"role": "user", "content": f"{scope_prompt}\n\nQuestion: {query}"}],
+                temperature=0,
             )
-        result = response.text.strip().lower()
+        result = response.choices[0].message.content.strip().lower()
         if result not in ("yes", "adjacent", "no"):
             logger.warning("Scope guard returned unexpected value: %s, defaulting to 'adjacent'", result)
             return "adjacent"
@@ -105,6 +114,12 @@ class GeminiService:
         header = settings_service.get("prompt.context_header")
         return f"{header}\n\n{context}{lang_instruction}"
 
+    def _build_messages(self, system_prompt: str, user_content: str) -> list[dict]:
+        return [
+            {"role": "system", "content": system_prompt + JSON_FORMAT_INSTRUCTION},
+            {"role": "user", "content": user_content},
+        ]
+
     async def generate_stream(
         self, query: str, articles: list[dict], language: str = "auto",
         include_thinking: bool = False,
@@ -119,37 +134,35 @@ class GeminiService:
         await db.quota_increment(model_key)
 
         user_content = f"{context}\n\n## Spurning notanda\n{query}"
+        system_prompt = settings_service.get("prompt.system")
+        messages = self._build_messages(system_prompt, user_content)
 
-        config = types.GenerateContentConfig(
-            system_instruction=settings_service.get("prompt.system"),
-            temperature=settings_service.get_float("model.temperature"),
-            response_mime_type="application/json",
-            response_schema=GeminiResponse,
-        )
+        kwargs: dict = {
+            "model": model,
+            "messages": messages,
+            "temperature": settings_service.get_float("model.temperature"),
+            "response_format": {"type": "json_object"},
+            "stream": True,
+        }
         if include_thinking:
-            config.thinking_config = types.ThinkingConfig(
-                thinking_budget=settings_service.get_int("model.thinking_budget"),
-                include_thoughts=True,
-            )
+            kwargs["extra_body"] = {
+                "reasoning": {
+                    "effort": "medium",
+                    "max_tokens": settings_service.get_int("model.thinking_budget"),
+                },
+            }
 
         try:
-            stream = await self._client.aio.models.generate_content_stream(
-                model=model,
-                contents=user_content,
-                config=config,
-            )
+            stream = await self._client.chat.completions.create(**kwargs)
         except APIError:
             kind = "pro" if "pro" in model.lower() else "flash"
             fallback = self._fallback_model(model, kind)
             if fallback is None:
                 raise
-            logger.warning("Gemini API error with model %r, retrying stream with %r", model, fallback)
+            logger.warning("LLM API error with model %r, retrying stream with %r", model, fallback)
             model = fallback
-            stream = await self._client.aio.models.generate_content_stream(
-                model=model,
-                contents=user_content,
-                config=config,
-            )
+            kwargs["model"] = model
+            stream = await self._client.chat.completions.create(**kwargs)
 
         async def text_iterator():
             json_buffer = []  # accumulate full JSON for final parse
@@ -161,55 +174,40 @@ class GeminiService:
             escape = False  # next char is escaped
 
             async for chunk in stream:
-                if not chunk.candidates:
+                if not chunk.choices:
                     continue
-                for part in chunk.candidates[0].content.parts:
-                    if part.thought:
-                        yield ("thinking", part.text)
-                        continue
-                    if not part.text:
-                        continue
+                delta = chunk.choices[0].delta
 
-                    json_buffer.append(part.text)
+                # Handle reasoning/thinking content (OpenRouter extension)
+                reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                if reasoning and include_thinking:
+                    yield ("thinking", reasoning)
+                    continue
 
-                    if state == "before":
-                        # Check if we've accumulated enough to find "answer": "
-                        joined = "".join(json_buffer)
-                        match = re.search(r'"answer"\s*:\s*"', joined)
-                        if match:
-                            state = "in_answer"
-                            # Anything after the marker is answer content
-                            after_marker = joined[match.end():]
-                            # Process this initial chunk through the answer parser
-                            decoded = []
-                            for ch in after_marker:
-                                if escape:
-                                    if ch == "n":
-                                        decoded.append("\n")
-                                    elif ch == "t":
-                                        decoded.append("\t")
-                                    else:
-                                        decoded.append(ch)  # \", \\, etc.
-                                    escape = False
-                                elif ch == "\\":
-                                    escape = True
-                                elif ch == '"':
-                                    state = "after"
-                                    break
-                                else:
-                                    decoded.append(ch)
-                            if decoded:
-                                yield ("answer", "".join(decoded))
-                    elif state == "in_answer":
+                text = delta.content
+                if not text:
+                    continue
+
+                json_buffer.append(text)
+
+                if state == "before":
+                    # Check if we've accumulated enough to find "answer": "
+                    joined = "".join(json_buffer)
+                    match = re.search(r'"answer"\s*:\s*"', joined)
+                    if match:
+                        state = "in_answer"
+                        # Anything after the marker is answer content
+                        after_marker = joined[match.end():]
+                        # Process this initial chunk through the answer parser
                         decoded = []
-                        for ch in part.text:
+                        for ch in after_marker:
                             if escape:
                                 if ch == "n":
                                     decoded.append("\n")
                                 elif ch == "t":
                                     decoded.append("\t")
                                 else:
-                                    decoded.append(ch)
+                                    decoded.append(ch)  # \", \\, etc.
                                 escape = False
                             elif ch == "\\":
                                 escape = True
@@ -220,7 +218,27 @@ class GeminiService:
                                 decoded.append(ch)
                         if decoded:
                             yield ("answer", "".join(decoded))
-                    # state == "after": just accumulate, parsed at end
+                elif state == "in_answer":
+                    decoded = []
+                    for ch in text:
+                        if escape:
+                            if ch == "n":
+                                decoded.append("\n")
+                            elif ch == "t":
+                                decoded.append("\t")
+                            else:
+                                decoded.append(ch)
+                            escape = False
+                        elif ch == "\\":
+                            escape = True
+                        elif ch == '"':
+                            state = "after"
+                            break
+                        else:
+                            decoded.append(ch)
+                    if decoded:
+                        yield ("answer", "".join(decoded))
+                # state == "after": just accumulate, parsed at end
 
             # Parse complete JSON to extract references_used
             full_json = "".join(json_buffer)
@@ -246,53 +264,43 @@ class GeminiService:
         await db.quota_increment(model_key)
 
         user_content = f"{context}\n\n## Spurning notanda\n{query}"
+        system_prompt = settings_service.get("prompt.system")
+        messages = self._build_messages(system_prompt, user_content)
 
-        config = types.GenerateContentConfig(
-            system_instruction=settings_service.get("prompt.system"),
-            temperature=settings_service.get_float("model.temperature"),
-            response_mime_type="application/json",
-            response_schema=GeminiResponse,
-        )
+        kwargs: dict = {
+            "model": model,
+            "messages": messages,
+            "temperature": settings_service.get_float("model.temperature"),
+            "response_format": {"type": "json_object"},
+        }
         if include_thinking:
-            config.thinking_config = types.ThinkingConfig(
-                thinking_budget=settings_service.get_int("model.thinking_budget"),
-                include_thoughts=True,
-            )
+            kwargs["extra_body"] = {
+                "reasoning": {
+                    "effort": "medium",
+                    "max_tokens": settings_service.get_int("model.thinking_budget"),
+                },
+            }
 
         try:
-            response = await self._client.aio.models.generate_content(
-                model=model,
-                contents=user_content,
-                config=config,
-            )
+            response = await self._client.chat.completions.create(**kwargs)
         except APIError:
             kind = "pro" if "pro" in model.lower() else "flash"
             fallback = self._fallback_model(model, kind)
             if fallback is None:
                 raise
-            logger.warning("Gemini API error with model %r, retrying with %r", model, fallback)
+            logger.warning("LLM API error with model %r, retrying with %r", model, fallback)
             model = fallback
-            response = await self._client.aio.models.generate_content(
-                model=model,
-                contents=user_content,
-                config=config,
-            )
+            kwargs["model"] = model
+            response = await self._client.chat.completions.create(**kwargs)
 
-        # Extract thinking parts if requested
+        # Extract thinking/reasoning if available
         thinking_text: str | None = None
-        raw_json = ""
         if include_thinking:
-            thinking_parts: list[str] = []
-            json_parts: list[str] = []
-            for part in response.candidates[0].content.parts:
-                if part.thought:
-                    thinking_parts.append(part.text)
-                elif part.text:
-                    json_parts.append(part.text)
-            thinking_text = "".join(thinking_parts) or None
-            raw_json = "".join(json_parts)
-        else:
-            raw_json = response.text
+            reasoning = getattr(response.choices[0].message, "reasoning_content", None)
+            if reasoning:
+                thinking_text = reasoning
+
+        raw_json = response.choices[0].message.content or ""
 
         # Parse structured JSON response
         try:

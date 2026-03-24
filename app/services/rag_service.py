@@ -8,7 +8,7 @@ from app.config import Settings
 from app.db import queries as db
 from app.models.schemas import QueryResponse, Reference
 from app.services import settings_service
-from app.services.gemini_service import GeminiService
+from app.services.llm_service import LLMService
 from app.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
@@ -20,10 +20,10 @@ def _query_hash(query: str) -> str:
 
 
 class RAGService:
-    def __init__(self, settings: Settings, embeddings: EmbeddingService, gemini: GeminiService):
+    def __init__(self, settings: Settings, embeddings: EmbeddingService, llm: LLMService):
         self._settings = settings
         self._embeddings = embeddings
-        self._gemini = gemini
+        self._llm = llm
 
     async def _log_query(
         self, query_text: str, response_text: str | None, model_used: str | None,
@@ -62,7 +62,7 @@ class RAGService:
                 return resp
 
         # Scope guard
-        scope = await self._gemini.check_scope(query)
+        scope = await self._llm.check_scope(query)
         if scope == "no":
             decline = (settings_service.get("prompt.decline_en") if language == "en"
                        else settings_service.get("prompt.decline_is"))
@@ -97,7 +97,7 @@ class RAGService:
 
         # Generate answer (structured output returns references_used)
         score_map = {m["id"]: m["score"] for m in matches}
-        model_used, answer_text, thinking_text, references_used = await self._gemini.generate_non_streaming(
+        model_used, answer_text, thinking_text, references_used = await self._llm.generate_non_streaming(
             query, articles, language, include_thinking=include_thinking,
         )
 
@@ -167,7 +167,7 @@ class RAGService:
             yield {"event": "status", "data": json.dumps({"stage": "searching", "message": "Leita í þekkingargrunni..."})}
 
             # Scope guard
-            scope = await self._gemini.check_scope(query)
+            scope = await self._llm.check_scope(query)
             if scope == "no":
                 decline = (settings_service.get("prompt.decline_en") if language == "en"
                            else settings_service.get("prompt.decline_is"))
@@ -217,7 +217,7 @@ class RAGService:
             yield {"event": "status", "data": json.dumps({"stage": "generating", "message": "Bý til svar..."})}
 
             # Stream LLM response
-            model_used, token_stream = await self._gemini.generate_stream(
+            model_used, token_stream = await self._llm.generate_stream(
                 query, articles, language, include_thinking=include_thinking,
             )
             full_answer = []

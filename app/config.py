@@ -20,11 +20,11 @@ class Settings(BaseSettings):
     deepinfra_api_key: str = ""
     deepinfra_model: str = "intfloat/multilingual-e5-large"
 
-    # Gemini
-    gemini_api_key: str = ""
-    gemini_pro_model: str = "gemini-3-pro-preview"
-    gemini_flash_model: str = "gemini-3-flash-preview"
-    gemini_pro_daily_limit: int = 200
+    # OpenRouter LLM
+    open_router_api_key: str = ""
+    llm_pro_model: str = "google/gemini-3.1-pro-preview"
+    llm_flash_model: str = "google/gemini-3-flash-preview"
+    llm_pro_daily_limit: int = 200
 
     # CORS
     cors_allowed_origins: str = "https://www.evropuvefur.is,https://evropuvefur.is"
@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 @lru_cache

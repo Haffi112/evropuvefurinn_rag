@@ -14,7 +14,7 @@ class ArticleCreate(BaseModel):
     answer: str = Field(description="Full answer text (HTML or plain text).")
     source_url: str = Field(description="Canonical URL where the article is published.")
     date: str = Field(description="Publication date as YYYY-MM-DD string.")
-    author: str = Field(description="Author or publishing organization.")
+    author: str | None = Field(default=None, description="Author or publishing organization.")
     categories: list[str] = Field(default_factory=list, description="Topic categories.")
     tags: list[str] = Field(default_factory=list, description="Free-form tags.")
 
@@ -51,7 +51,7 @@ class ArticleFull(BaseModel):
     answer: str
     source_url: str
     date: str
-    author: str
+    author: str | None = None
     categories: list[str]
     tags: list[str]
     created_at: datetime
@@ -126,7 +126,7 @@ class QueryResponse(BaseModel):
     query: str = Field(description="The original query text.")
     answer: str = Field(description="AI-generated answer grounded in the retrieved articles.")
     references: list[Reference] = Field(description="Source articles used to generate the answer, ranked by relevance.")
-    model_used: str = Field(description="Gemini model that generated the answer (e.g. 'gemini-3-pro').")
+    model_used: str = Field(description="LLM model that generated the answer (e.g. 'google/gemini-3.1-pro-preview').")
     cached: bool = Field(default=False, description="Whether this answer was served from cache.")
     query_id: str = Field(description="Unique identifier for this query (for logging/debugging).")
     scope_declined: bool = Field(default=False, description="True if the query was outside the EU/Iceland scope and was declined.")
@@ -137,7 +137,7 @@ class QueryResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = Field(description="Overall status: 'healthy' or 'degraded'.")
     version: str = Field(description="API version string.")
-    checks: dict[str, str] = Field(description="Per-service status (postgres, embeddings, gemini).")
+    checks: dict[str, str] = Field(description="Per-service status (postgres, embeddings, llm).")
 
 
 class StatsResponse(BaseModel):
