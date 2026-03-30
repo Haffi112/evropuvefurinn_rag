@@ -30,7 +30,7 @@ export async function apiFetch<T>(
   };
 
   if (key) {
-    headers["X-API-Key"] = key;
+    headers["Authorization"] = `Bearer ${key}`;
   }
   if (options.body && typeof options.body === "string") {
     headers["Content-Type"] = "application/json";

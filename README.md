@@ -68,7 +68,7 @@ curl http://localhost:8000/api/v1/health
 
 All endpoints are prefixed with `/api/v1`.
 
-**Auth types:** `none` = public, `API key` = `Authorization: Bearer <CMS_API_KEY>`, `JWT` = reviewer Bearer token from `/review/auth/login`.
+**Auth types:** `none` = public, `Bearer` = `Authorization: Bearer <CMS_API_KEY>`, `JWT` = reviewer Bearer token from `/review/auth/login`.
 
 ### Health & Stats
 
