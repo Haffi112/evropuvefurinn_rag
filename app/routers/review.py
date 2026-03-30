@@ -1,10 +1,12 @@
 import io
 import json
 import logging
+import time
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from sse_starlette.sse import EventSourceResponse
 
 from app.db import queries as db
 from app.middleware.review_auth import (
@@ -24,6 +26,8 @@ from app.models.review_schemas import (
     ReviewQueryListItem,
     ReviewQueryListResponse,
 )
+from app.models.schemas import ReviewPlaygroundRequest
+from app.services.rag_service import RAGService
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +201,54 @@ async def export_article(
         return _export_markdown(article, log, refs)
     else:
         return _export_docx(article, log, refs)
+
+
+def _get_rag(request: Request) -> RAGService:
+    return request.app.state.rag
+
+
+@router.post(
+    "/playground",
+    summary="Reviewer playground query",
+    description="Submit a query from the reviewer playground. Logged with reviewer attribution. "
+    "Supports web search mode (bypasses RAG) and SSE streaming.",
+)
+async def reviewer_playground(
+    body: ReviewPlaygroundRequest,
+    request: Request,
+    reviewer: ReviewUser = Depends(verify_review_token),
+):
+    rag = _get_rag(request)
+    ip_address = request.client.host if request.client else None
+    start_time = time.monotonic()
+    logger.info("Reviewer playground query: reviewer=%s web_search=%s stream=%s",
+                reviewer.username, body.web_search, body.stream)
+
+    if body.stream:
+        return EventSourceResponse(
+            rag.process_query_stream(
+                body.query, body.top_k, body.language,
+                ip_address=ip_address, start_time=start_time,
+                score_threshold=body.score_threshold,
+                include_thinking=body.include_thinking,
+                web_search=body.web_search,
+                reviewer_id=reviewer.id,
+            )
+        )
+
+    try:
+        response = await rag.process_query_json(
+            body.query, body.top_k, body.language,
+            ip_address=ip_address, start_time=start_time,
+            score_threshold=body.score_threshold,
+            include_thinking=body.include_thinking,
+            web_search=body.web_search,
+            reviewer_id=reviewer.id,
+        )
+    except Exception:
+        logger.error("Reviewer playground query failed", exc_info=True)
+        raise HTTPException(status_code=500, detail="Villa kom upp við úrvinnslu fyrirspurnar.")
+    return response
 
 
 def _export_markdown(article: dict, log: dict | None, refs: list) -> StreamingResponse:

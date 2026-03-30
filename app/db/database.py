@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS query_log (
     cached          BOOLEAN NOT NULL DEFAULT FALSE,
     latency_ms      INTEGER,
     ip_address      TEXT,
+    reviewer_id     BIGINT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_query_log_created_at ON query_log (created_at DESC);
@@ -119,6 +120,8 @@ CREATE INDEX IF NOT EXISTS idx_articles_embedding_hnsw
 ALTER TABLE query_log ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'pending';
 
 ALTER TABLE articles ALTER COLUMN author DROP NOT NULL;
+
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS reviewer_id BIGINT REFERENCES review_users(id);
 """
 
 

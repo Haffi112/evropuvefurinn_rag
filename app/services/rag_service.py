@@ -29,6 +29,7 @@ class RAGService:
         self, query_text: str, response_text: str | None, model_used: str | None,
         references: list | None, scope_declined: bool, cached: bool,
         start_time: float | None, ip_address: str | None,
+        reviewer_id: int | None = None,
     ) -> None:
         try:
             latency_ms = round((time.monotonic() - start_time) * 1000) if start_time else None
@@ -37,6 +38,7 @@ class RAGService:
                 model_used=model_used, references=references,
                 scope_declined=scope_declined, cached=cached,
                 latency_ms=latency_ms, ip_address=ip_address,
+                reviewer_id=reviewer_id,
             )
         except Exception:
             logger.warning("Failed to write query log", exc_info=True)
@@ -47,10 +49,25 @@ class RAGService:
         self, query: str, top_k: int, language: str,
         ip_address: str | None = None, start_time: float | None = None,
         score_threshold: float | None = None, include_thinking: bool = False,
+        web_search: bool = False, reviewer_id: int | None = None,
     ) -> QueryResponse:
         query_id = f"q_{uuid.uuid4().hex[:12]}"
         qhash = _query_hash(query)
         threshold = score_threshold if score_threshold is not None else self._settings.rag_score_threshold
+
+        # Web search mode — skip RAG entirely
+        if web_search:
+            model_used, answer_text, thinking_text, _ = await self._llm.generate_web_search_non_streaming(
+                query, language, include_thinking=include_thinking,
+            )
+            response = QueryResponse(
+                query=query, answer=answer_text, references=[],
+                model_used=model_used, cached=False, query_id=query_id,
+            )
+            await self._log_query(query, answer_text, model_used,
+                                  [], False, False, start_time, ip_address,
+                                  reviewer_id=reviewer_id)
+            return response
 
         # Cache check (skip when thinking — it's a debug tool)
         if not include_thinking:
@@ -127,7 +144,8 @@ class RAGService:
             await db.cache_store(qhash, query, cache_data, article_ids, self._settings.query_cache_ttl_hours)
 
         await self._log_query(query, answer_text, model_used,
-                              [r.model_dump() for r in references], False, False, start_time, ip_address)
+                              [r.model_dump() for r in references], False, False, start_time, ip_address,
+                              reviewer_id=reviewer_id)
         return response
 
     # ── SSE (streaming) mode ─────────────────────────────────
@@ -136,11 +154,35 @@ class RAGService:
         self, query: str, top_k: int, language: str,
         ip_address: str | None = None, start_time: float | None = None,
         score_threshold: float | None = None, include_thinking: bool = False,
+        web_search: bool = False, reviewer_id: int | None = None,
     ):
         """Yields dicts with 'event' and 'data' keys for sse-starlette."""
         query_id = f"q_{uuid.uuid4().hex[:12]}"
 
         try:
+            # Web search mode — skip RAG entirely
+            if web_search:
+                yield {"event": "status", "data": json.dumps({"stage": "generating", "message": "Web search..."})}
+                model_used, token_stream = await self._llm.generate_web_search_stream(
+                    query, language, include_thinking=include_thinking,
+                )
+                full_answer = []
+                async for chunk_type, chunk_text in token_stream:
+                    if chunk_type == "thinking":
+                        yield {"event": "thinking", "data": json.dumps({"text": chunk_text})}
+                    elif chunk_type == "references":
+                        pass  # no structured refs in web search mode
+                    else:
+                        full_answer.append(chunk_text)
+                        yield {"event": "token", "data": json.dumps({"text": chunk_text})}
+                yield {"event": "references", "data": json.dumps({"references": []})}
+                yield {"event": "done", "data": json.dumps({"model_used": model_used, "cached": False, "query_id": query_id})}
+                answer_text = "".join(full_answer)
+                await self._log_query(query, answer_text, model_used,
+                                      [], False, False, start_time, ip_address,
+                                      reviewer_id=reviewer_id)
+                return
+
             qhash = _query_hash(query)
             threshold = score_threshold if score_threshold is not None else self._settings.rag_score_threshold
 
@@ -257,7 +299,8 @@ class RAGService:
                 }
                 await db.cache_store(qhash, query, cache_data, article_ids, self._settings.query_cache_ttl_hours)
             await self._log_query(query, answer_text, model_used,
-                                  references, False, False, start_time, ip_address)
+                                  references, False, False, start_time, ip_address,
+                                  reviewer_id=reviewer_id)
 
         except Exception:
             logger.error("Stream failed for query_id=%s", query_id, exc_info=True)

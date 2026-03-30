@@ -226,6 +226,7 @@ async def insert_query_log(
     cached: bool,
     latency_ms: int | None,
     ip_address: str | None,
+    reviewer_id: int | None = None,
 ) -> int:
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -233,8 +234,8 @@ async def insert_query_log(
             """
             INSERT INTO query_log
                 (query_text, response_text, model_used, "references",
-                 scope_declined, cached, latency_ms, ip_address)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 scope_declined, cached, latency_ms, ip_address, reviewer_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING id
             """,
             query_text,
@@ -245,6 +246,7 @@ async def insert_query_log(
             cached,
             latency_ms,
             ip_address,
+            reviewer_id,
         )
 
 
@@ -401,10 +403,12 @@ async def list_query_logs_for_review(
             f"""
             SELECT ql.id, ql.query_text, ql.model_used, ql.review_status,
                    ql.cached, ql.created_at,
-                   ru.username AS reviewer_username
+                   ru.username AS reviewer_username,
+                   su.username AS submitted_by
             FROM query_log ql
             LEFT JOIN review_evaluations re ON re.query_log_id = ql.id
             LEFT JOIN review_users ru ON ru.id = re.reviewer_id
+            LEFT JOIN review_users su ON su.id = ql.reviewer_id
             {where}
             ORDER BY ql.created_at DESC
             LIMIT ${idx} OFFSET ${idx + 1}

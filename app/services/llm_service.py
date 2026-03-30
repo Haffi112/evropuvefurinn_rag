@@ -313,3 +313,137 @@ class LLMService:
             refs = []
 
         return model, answer_text, thinking_text, refs
+
+    # ── Web search generation (no RAG) ────────────────────────
+
+    def _web_search_model(self, model: str) -> str:
+        """Append :online suffix for OpenRouter web search."""
+        return f"{model}:online"
+
+    async def generate_web_search_stream(
+        self, query: str, language: str = "auto",
+        include_thinking: bool = False,
+    ):
+        """Returns (model_used, async_iterator) for web search mode.
+        Iterator yields ("thinking", text), ("answer", text), or ("references", [])."""
+        model = await self.select_model()
+        online_model = self._web_search_model(model)
+
+        model_key = "pro" if "pro" in model.lower() else "flash"
+        await db.quota_increment(model_key)
+
+        system_prompt = settings_service.get("prompt.web_search")
+        lang_instruction = ""
+        if language == "en":
+            lang_instruction = settings_service.get("prompt.lang_override_en")
+        elif language == "is":
+            lang_instruction = settings_service.get("prompt.lang_override_is")
+
+        messages = [
+            {"role": "system", "content": system_prompt + lang_instruction},
+            {"role": "user", "content": query},
+        ]
+
+        kwargs: dict = {
+            "model": online_model,
+            "messages": messages,
+            "temperature": settings_service.get_float("model.temperature"),
+            "stream": True,
+        }
+        if include_thinking:
+            kwargs["extra_body"] = {
+                "reasoning": {
+                    "effort": "medium",
+                    "max_tokens": settings_service.get_int("model.thinking_budget"),
+                },
+            }
+
+        try:
+            stream = await self._client.chat.completions.create(**kwargs)
+        except APIError:
+            kind = "pro" if "pro" in model.lower() else "flash"
+            fallback = self._fallback_model(model, kind)
+            if fallback is None:
+                raise
+            logger.warning("LLM API error with model %r, retrying with %r", online_model, fallback)
+            model = fallback
+            online_model = self._web_search_model(model)
+            kwargs["model"] = online_model
+            stream = await self._client.chat.completions.create(**kwargs)
+
+        async def text_iterator():
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+
+                reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                if reasoning and include_thinking:
+                    yield ("thinking", reasoning)
+                    continue
+
+                text = delta.content
+                if text:
+                    yield ("answer", text)
+
+            yield ("references", [])
+
+        return online_model, text_iterator()
+
+    async def generate_web_search_non_streaming(
+        self, query: str, language: str = "auto",
+        include_thinking: bool = False,
+    ) -> tuple[str, str, str | None, list[str]]:
+        """Returns (model_used, answer_text, thinking_text_or_None, [])."""
+        model = await self.select_model()
+        online_model = self._web_search_model(model)
+
+        model_key = "pro" if "pro" in model.lower() else "flash"
+        await db.quota_increment(model_key)
+
+        system_prompt = settings_service.get("prompt.web_search")
+        lang_instruction = ""
+        if language == "en":
+            lang_instruction = settings_service.get("prompt.lang_override_en")
+        elif language == "is":
+            lang_instruction = settings_service.get("prompt.lang_override_is")
+
+        messages = [
+            {"role": "system", "content": system_prompt + lang_instruction},
+            {"role": "user", "content": query},
+        ]
+
+        kwargs: dict = {
+            "model": online_model,
+            "messages": messages,
+            "temperature": settings_service.get_float("model.temperature"),
+        }
+        if include_thinking:
+            kwargs["extra_body"] = {
+                "reasoning": {
+                    "effort": "medium",
+                    "max_tokens": settings_service.get_int("model.thinking_budget"),
+                },
+            }
+
+        try:
+            response = await self._client.chat.completions.create(**kwargs)
+        except APIError:
+            kind = "pro" if "pro" in model.lower() else "flash"
+            fallback = self._fallback_model(model, kind)
+            if fallback is None:
+                raise
+            logger.warning("LLM API error with model %r, retrying with %r", online_model, fallback)
+            model = fallback
+            online_model = self._web_search_model(model)
+            kwargs["model"] = online_model
+            response = await self._client.chat.completions.create(**kwargs)
+
+        thinking_text: str | None = None
+        if include_thinking:
+            reasoning = getattr(response.choices[0].message, "reasoning_content", None)
+            if reasoning:
+                thinking_text = reasoning
+
+        answer_text = response.choices[0].message.content or ""
+        return online_model, answer_text, thinking_text, []

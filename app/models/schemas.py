@@ -114,6 +114,16 @@ class QueryRequest(BaseModel):
     )
 
 
+class ReviewPlaygroundRequest(BaseModel):
+    query: str = Field(..., max_length=1000, description="The question to ask.")
+    stream: bool = Field(default=True, description="Stream response via SSE.")
+    language: str = Field(default="auto", description="Response language: 'is', 'en', or 'auto'.")
+    web_search: bool = Field(default=False, description="Use web search instead of RAG knowledge base.")
+    include_thinking: bool = Field(default=False, description="Include model chain-of-thought.")
+    top_k: int = Field(default=5, ge=1, le=20, description="Number of articles to retrieve (ignored when web_search=True).")
+    score_threshold: float | None = Field(default=None, ge=0.0, le=1.0, description="Min relevance score (ignored when web_search=True).")
+
+
 class Reference(BaseModel):
     id: str = Field(description="Article ID.")
     title: str = Field(description="Article title.")

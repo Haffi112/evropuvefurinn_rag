@@ -126,6 +126,13 @@ def _build_registry() -> dict[str, SettingMeta]:
             default="## Greinar úr þekkingargrunni",
             input_type="text",
         ),
+        "prompt.web_search": SettingMeta(
+            label="Web Search Prompt",
+            description="System prompt used when web search mode is enabled (no RAG)",
+            category="prompt",
+            default="",
+            input_type="textarea",
+        ),
     }
 
 
@@ -153,6 +160,13 @@ def init_defaults(settings) -> None:
             _registry["prompt.scope_guard"].default = data["task"]
     except Exception:
         logger.warning("Could not load scope_guard.yaml for defaults")
+
+    try:
+        with open(PROMPTS_DIR / "web_search_prompt.yaml") as f:
+            data = yaml.safe_load(f)
+            _registry["prompt.web_search"].default = data["system"]
+    except Exception:
+        logger.warning("Could not load web_search_prompt.yaml for defaults")
 
     logger.info("Settings registry initialized with %d keys", len(_registry))
 
