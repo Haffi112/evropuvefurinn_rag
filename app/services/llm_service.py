@@ -27,11 +27,15 @@ class LLMService:
         self._settings = settings
         self._client: AsyncOpenAI | None = None
 
+    _extra_headers = {
+        "HTTP-Referer": "https://evropuvefur.is",
+        "X-OpenRouter-Title": "Evropuvefurinn",
+    }
+
     async def initialize(self) -> None:
         self._client = AsyncOpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=self._settings.open_router_api_key,
-            default_headers={"HTTP-Referer": "https://evropuvefur.is"},
         )
         logger.info("LLMService initialized (OpenRouter)")
 
@@ -62,6 +66,7 @@ class LLMService:
                 model=flash_model,
                 messages=[{"role": "user", "content": f"{scope_prompt}\n\nQuestion: {query}"}],
                 temperature=0,
+                extra_headers=self._extra_headers,
             )
         except APIError:
             fallback = self._fallback_model(flash_model, "flash")
@@ -72,6 +77,7 @@ class LLMService:
                 model=fallback,
                 messages=[{"role": "user", "content": f"{scope_prompt}\n\nQuestion: {query}"}],
                 temperature=0,
+                extra_headers=self._extra_headers,
             )
         result = response.choices[0].message.content.strip().lower()
         if result not in ("yes", "adjacent", "no"):
@@ -148,6 +154,7 @@ class LLMService:
             "temperature": settings_service.get_float("model.temperature"),
             "response_format": {"type": "json_object"},
             "stream": True,
+            "extra_headers": self._extra_headers,
         }
         if include_thinking:
             kwargs["extra_body"] = {
@@ -277,6 +284,7 @@ class LLMService:
             "messages": messages,
             "temperature": settings_service.get_float("model.temperature"),
             "response_format": {"type": "json_object"},
+            "extra_headers": self._extra_headers,
         }
         if include_thinking:
             kwargs["extra_body"] = {
@@ -354,6 +362,7 @@ class LLMService:
             "messages": messages,
             "temperature": settings_service.get_float("model.temperature"),
             "stream": True,
+            "extra_headers": self._extra_headers,
         }
         if include_thinking:
             kwargs["extra_body"] = {
@@ -422,6 +431,7 @@ class LLMService:
             "model": online_model,
             "messages": messages,
             "temperature": settings_service.get_float("model.temperature"),
+            "extra_headers": self._extra_headers,
         }
         if include_thinking:
             kwargs["extra_body"] = {
