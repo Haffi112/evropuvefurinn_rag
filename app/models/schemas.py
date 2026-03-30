@@ -122,6 +122,7 @@ class ReviewPlaygroundRequest(BaseModel):
     include_thinking: bool = Field(default=False, description="Include model chain-of-thought.")
     top_k: int = Field(default=5, ge=1, le=20, description="Number of articles to retrieve (ignored when web_search=True).")
     score_threshold: float | None = Field(default=None, ge=0.0, le=1.0, description="Min relevance score (ignored when web_search=True).")
+    model: str | None = Field(default=None, description="Model override: 'pro' or 'flash'. Null = auto (quota-based).")
 
 
 class Reference(BaseModel):

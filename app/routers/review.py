@@ -233,6 +233,7 @@ async def reviewer_playground(
                 include_thinking=body.include_thinking,
                 web_search=body.web_search,
                 reviewer_id=reviewer.id,
+                model_override=body.model,
             )
         )
 
@@ -244,6 +245,7 @@ async def reviewer_playground(
             include_thinking=body.include_thinking,
             web_search=body.web_search,
             reviewer_id=reviewer.id,
+            model_override=body.model,
         )
     except Exception:
         logger.error("Reviewer playground query failed", exc_info=True)

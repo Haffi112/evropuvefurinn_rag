@@ -28,6 +28,7 @@ export default function ReviewPlaygroundPage() {
   const [language, setLanguage] = useState("auto");
   const [streaming, setStreaming] = useState(true);
   const [webSearch, setWebSearch] = useState(false);
+  const [modelChoice, setModelChoice] = useState<string>("auto");
   const [answer, setAnswer] = useState("");
   const [refs, setRefs] = useState<Reference[]>([]);
   const [meta, setMeta] = useState<Record<string, unknown>>({});
@@ -60,6 +61,7 @@ export default function ReviewPlaygroundPage() {
         language,
         web_search: webSearch,
         include_thinking: showThinking,
+        model: modelChoice === "auto" ? null : modelChoice,
         ...(webSearch ? {} : { top_k: maxArticles, score_threshold: scoreThreshold }),
       };
 
@@ -133,7 +135,7 @@ export default function ReviewPlaygroundPage() {
       setLoading(false);
       abortRef.current = null;
     }
-  }, [query, language, streaming, webSearch, loading, maxArticles, scoreThreshold, showThinking]);
+  }, [query, language, streaming, webSearch, modelChoice, loading, maxArticles, scoreThreshold, showThinking]);
 
   function handleSSEEvent(event: string, data: Record<string, unknown>) {
     switch (event) {
@@ -193,6 +195,16 @@ export default function ReviewPlaygroundPage() {
                 <SelectItem value="auto">Auto</SelectItem>
                 <SelectItem value="is">Icelandic</SelectItem>
                 <SelectItem value="en">English</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={modelChoice} onValueChange={setModelChoice}>
+              <SelectTrigger className="w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">Auto (quota)</SelectItem>
+                <SelectItem value="pro">Gemini 3.1 Pro</SelectItem>
+                <SelectItem value="flash">Gemini 3 Flash</SelectItem>
               </SelectContent>
             </Select>
             <label className="flex items-center gap-2 text-sm">

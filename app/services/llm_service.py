@@ -81,11 +81,16 @@ class LLMService:
 
     # ── Model selection ──────────────────────────────────────
 
-    async def select_model(self) -> str:
-        """Check Pro quota; return Pro model name if under limit, else Flash."""
-        pro_limit = settings_service.get_int("model.pro_daily_limit")
+    async def select_model(self, model_override: str | None = None) -> str:
+        """Return model name. If model_override is 'pro' or 'flash', use that directly.
+        Otherwise check Pro quota; return Pro if under limit, else Flash."""
         pro_name = settings_service.get("model.pro_name")
         flash_name = settings_service.get("model.flash_name")
+        if model_override == "pro":
+            return pro_name
+        if model_override == "flash":
+            return flash_name
+        pro_limit = settings_service.get_int("model.pro_daily_limit")
         pro_count = await db.quota_get("pro")
         if pro_count < pro_limit:
             return pro_name
@@ -122,11 +127,11 @@ class LLMService:
 
     async def generate_stream(
         self, query: str, articles: list[dict], language: str = "auto",
-        include_thinking: bool = False,
+        include_thinking: bool = False, model_override: str | None = None,
     ):
         """Returns (model_used, async_iterator) where iterator yields
         ("thinking", text), ("answer", text), or ("references", list[str])."""
-        model = await self.select_model()
+        model = await self.select_model(model_override)
         context = self._build_context(articles, language)
 
         # Track quota
@@ -254,10 +259,10 @@ class LLMService:
 
     async def generate_non_streaming(
         self, query: str, articles: list[dict], language: str = "auto",
-        include_thinking: bool = False,
+        include_thinking: bool = False, model_override: str | None = None,
     ) -> tuple[str, str, str | None, list[str]]:
         """Returns (model_used, answer_text, thinking_text_or_None, references_used)."""
-        model = await self.select_model()
+        model = await self.select_model(model_override)
         context = self._build_context(articles, language)
 
         model_key = "pro" if "pro" in model.lower() else "flash"
@@ -322,11 +327,11 @@ class LLMService:
 
     async def generate_web_search_stream(
         self, query: str, language: str = "auto",
-        include_thinking: bool = False,
+        include_thinking: bool = False, model_override: str | None = None,
     ):
         """Returns (model_used, async_iterator) for web search mode.
         Iterator yields ("thinking", text), ("answer", text), or ("references", [])."""
-        model = await self.select_model()
+        model = await self.select_model(model_override)
         online_model = self._web_search_model(model)
 
         model_key = "pro" if "pro" in model.lower() else "flash"
@@ -392,10 +397,10 @@ class LLMService:
 
     async def generate_web_search_non_streaming(
         self, query: str, language: str = "auto",
-        include_thinking: bool = False,
+        include_thinking: bool = False, model_override: str | None = None,
     ) -> tuple[str, str, str | None, list[str]]:
         """Returns (model_used, answer_text, thinking_text_or_None, [])."""
-        model = await self.select_model()
+        model = await self.select_model(model_override)
         online_model = self._web_search_model(model)
 
         model_key = "pro" if "pro" in model.lower() else "flash"

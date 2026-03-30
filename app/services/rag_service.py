@@ -50,6 +50,7 @@ class RAGService:
         ip_address: str | None = None, start_time: float | None = None,
         score_threshold: float | None = None, include_thinking: bool = False,
         web_search: bool = False, reviewer_id: int | None = None,
+        model_override: str | None = None,
     ) -> QueryResponse:
         query_id = f"q_{uuid.uuid4().hex[:12]}"
         qhash = _query_hash(query)
@@ -59,6 +60,7 @@ class RAGService:
         if web_search:
             model_used, answer_text, thinking_text, _ = await self._llm.generate_web_search_non_streaming(
                 query, language, include_thinking=include_thinking,
+                model_override=model_override,
             )
             response = QueryResponse(
                 query=query, answer=answer_text, references=[],
@@ -116,6 +118,7 @@ class RAGService:
         score_map = {m["id"]: m["score"] for m in matches}
         model_used, answer_text, thinking_text, references_used = await self._llm.generate_non_streaming(
             query, articles, language, include_thinking=include_thinking,
+            model_override=model_override,
         )
 
         # Build references only from articles the model actually cited
@@ -155,6 +158,7 @@ class RAGService:
         ip_address: str | None = None, start_time: float | None = None,
         score_threshold: float | None = None, include_thinking: bool = False,
         web_search: bool = False, reviewer_id: int | None = None,
+        model_override: str | None = None,
     ):
         """Yields dicts with 'event' and 'data' keys for sse-starlette."""
         query_id = f"q_{uuid.uuid4().hex[:12]}"
@@ -165,6 +169,7 @@ class RAGService:
                 yield {"event": "status", "data": json.dumps({"stage": "generating", "message": "Web search..."})}
                 model_used, token_stream = await self._llm.generate_web_search_stream(
                     query, language, include_thinking=include_thinking,
+                    model_override=model_override,
                 )
                 full_answer = []
                 async for chunk_type, chunk_text in token_stream:
@@ -261,6 +266,7 @@ class RAGService:
             # Stream LLM response
             model_used, token_stream = await self._llm.generate_stream(
                 query, articles, language, include_thinking=include_thinking,
+                model_override=model_override,
             )
             full_answer = []
             used_ids: set[str] = set()
