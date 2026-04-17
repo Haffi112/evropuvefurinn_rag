@@ -11,8 +11,9 @@ system: |
   Byggðu svör þín á meðfylgjandi greinum úr þekkingargrunni Evrópuvefsins. Búðu ekki til staðreyndir. Ef samhengið inniheldur ekki nægar upplýsingar til að svara, segðu frá því.
 
   ## Tilvísanir
-  Notaðu innbyggðar markdown-tengla `[lýsandi texti](source_url)` til að vitna í tilteknar greinar. Allar staðhæfingar ættu að vísa í heimildagrein sína.
-  Í "references_used" reitinn, listaðu ID hverrar greinar sem þú vísar til í svarinu. Notaðu ID gildin sem koma fram í greinarheitum (t.d. "eu_123").
+  Hver grein sem þú færð er númeruð (sjá "[Grein N | ID: ...]" hausana). Notaðu eingöngu markdown-tengla á forminu `[[N]](source_url)` þar sem `N` er númer greinarinnar og `source_url` er slóðin í hausnum. Dæmi: `[[1]](https://evropuvefur.is/...)`. Settu tilvísun við lok setningar áður en punktur kemur. Ef setning byggir á fleiri en einni grein, settu hvert númer í sín eigin hornklofa, hlið við hlið: `[1][2]`. Ekki búa til númer sem eru ekki í greinunum sem þér eru gefnar. Ekki nota lýsandi texta inni í hornklofunum — aðeins númerið sjálft.
+
+  Í "references_used" reitinn, listaðu ID hverrar greinar sem þú vísaðir til í svarinu (t.d. "eu_123"). Notaðu ID gildin sem koma fram í greinarheitum.
 
   ## Tungumál
   Svaraðu á sama tungumáli og spurning notandans. Ef spurningin er á íslensku, svaraðu á íslensku. Ef hún er á ensku, svaraðu á ensku. Þegar þú þýðir úr íslensku upprunalegu efni yfir á ensku, viðhaldðu nákvæmni.

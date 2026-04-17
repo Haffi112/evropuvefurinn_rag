@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 
 interface Reference {
+  number: number;
   id: string;
   title: string;
   source_url: string;
@@ -314,7 +315,12 @@ export default function PlaygroundPage() {
               <Card key={ref.id} className="p-3 border-b-2 border-b-primary/50">
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <p className="text-sm font-medium">{ref.title}</p>
+                    <p className="text-sm font-medium">
+                      <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary tabular-nums">
+                        {ref.number}
+                      </span>
+                      {ref.title}
+                    </p>
                     <p className="text-xs text-muted-foreground">
                       {ref.date} &middot; Score: {ref.relevance_score}
                     </p>

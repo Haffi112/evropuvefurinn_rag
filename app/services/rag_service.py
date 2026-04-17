@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 
@@ -111,8 +112,10 @@ class RAGService:
                                   [], False, False, start_time, ip_address)
             return resp
 
-        # Fetch full articles
+        # Fetch full articles, preserving vector-score order (ANY() doesn't)
         articles = await db.get_articles_by_ids(article_ids)
+        order = {aid: i for i, aid in enumerate(article_ids)}
+        articles.sort(key=lambda a: order[a["id"]])
 
         # Generate answer (structured output returns references_used)
         score_map = {m["id"]: m["score"] for m in matches}
@@ -121,16 +124,21 @@ class RAGService:
             model_override=model_override,
         )
 
-        # Build references only from articles the model actually cited
+        # Build references only from articles the model actually cited.
+        # `number` is the 1-indexed retrieval rank, matching [Grein N] in the prompt
+        # and the [N] markers in the answer.
         used_ids = set(references_used)
         references = [
             Reference(
+                number=i + 1,
                 id=a["id"], title=a["title"], source_url=a["source_url"],
                 date=a["date"], relevance_score=round(score_map.get(a["id"], 0), 4),
             )
-            for a in articles
+            for i, a in enumerate(articles)
             if a["id"] in used_ids
         ]
+        if used_ids and not re.search(r"\[\d+\]", answer_text):
+            logger.warning("Answer has references but no [N] citations (query_id=%s)", query_id)
 
         response = QueryResponse(
             query=query, answer=answer_text, references=references,
@@ -256,8 +264,10 @@ class RAGService:
                                       [], False, False, start_time, ip_address)
                 return
 
-            # Fetch full articles
+            # Fetch full articles, preserving vector-score order (ANY() doesn't)
             articles = await db.get_articles_by_ids(article_ids)
+            order = {aid: i for i, aid in enumerate(article_ids)}
+            articles.sort(key=lambda a: order[a["id"]])
             score_map = {m["id"]: m["score"] for m in matches}
 
             # Status: generating
@@ -279,16 +289,22 @@ class RAGService:
                     full_answer.append(chunk_text)
                     yield {"event": "token", "data": json.dumps({"text": chunk_text})}
 
-            # Build references only from articles the model actually cited
+            # Build references only from articles the model actually cited.
+            # `number` is the 1-indexed retrieval rank, matching [Grein N] in the prompt
+            # and the [N] markers in the answer.
             references = [
                 {
+                    "number": i + 1,
                     "id": a["id"], "title": a["title"], "source_url": a["source_url"],
                     "date": a["date"], "relevance_score": round(score_map.get(a["id"], 0), 4),
                 }
-                for a in articles
+                for i, a in enumerate(articles)
                 if a["id"] in used_ids
             ]
             yield {"event": "references", "data": json.dumps({"references": references})}
+            answer_text = "".join(full_answer)
+            if used_ids and not re.search(r"\[\d+\]", answer_text):
+                logger.warning("Answer has references but no [N] citations (query_id=%s)", query_id)
 
             # Done
             yield {
@@ -297,7 +313,6 @@ class RAGService:
             }
 
             # Store in cache (skip when thinking)
-            answer_text = "".join(full_answer)
             if not include_thinking:
                 cache_data = {
                     "query": query, "answer": answer_text, "references": references,

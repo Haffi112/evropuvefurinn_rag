@@ -126,6 +126,7 @@ class ReviewPlaygroundRequest(BaseModel):
 
 
 class Reference(BaseModel):
+    number: int = Field(description="Position in the retrieval result (1-indexed). Matches inline [N] citations in the answer.")
     id: str = Field(description="Article ID.")
     title: str = Field(description="Article title.")
     source_url: str = Field(description="Link to the original article.")
