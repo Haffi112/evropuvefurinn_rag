@@ -20,6 +20,31 @@ def _query_hash(query: str) -> str:
     return hashlib.sha256(normalized.encode()).hexdigest()
 
 
+def _build_number_map(articles: list[dict], used_ids: set[str]) -> dict[int, int]:
+    """Map retrieval-rank number (1-indexed article position) → dense citation
+    number (1..N_cited), skipping articles that weren't cited."""
+    number_map: dict[int, int] = {}
+    new_num = 0
+    for i, a in enumerate(articles):
+        if a["id"] in used_ids:
+            new_num += 1
+            number_map[i + 1] = new_num
+    return number_map
+
+
+def _renumber_citations(answer_text: str, number_map: dict[int, int]) -> str:
+    """Rewrite inline [N] markers so they use dense 1..N_cited numbering.
+    Numbers not in the mapping are left untouched (safe against non-citation
+    bracket text like "[2023]")."""
+    if not number_map:
+        return answer_text
+    return re.sub(
+        r"\[(\d+)\]",
+        lambda m: f"[{number_map.get(int(m.group(1)), int(m.group(1)))}]",
+        answer_text,
+    )
+
+
 class RAGService:
     def __init__(self, settings: Settings, embeddings: EmbeddingService, llm: LLMService):
         self._settings = settings
@@ -124,19 +149,23 @@ class RAGService:
             model_override=model_override,
         )
 
-        # Build references only from articles the model actually cited.
-        # `number` is the 1-indexed retrieval rank, matching [Grein N] in the prompt
-        # and the [N] markers in the answer.
+        # Build references only from articles the model actually cited, using
+        # dense 1..N_cited numbering (retrieval-rank gaps collapsed).
         used_ids = set(references_used)
+        number_map = _build_number_map(articles, used_ids)
         references = [
             Reference(
-                number=i + 1,
+                number=number_map[i + 1],
                 id=a["id"], title=a["title"], source_url=a["source_url"],
                 date=a["date"], relevance_score=round(score_map.get(a["id"], 0), 4),
             )
             for i, a in enumerate(articles)
             if a["id"] in used_ids
         ]
+
+        # Rewrite inline [N] markers in the answer to the dense numbering
+        answer_text = _renumber_citations(answer_text, number_map)
+
         if used_ids and not re.search(r"\[\d+\]", answer_text):
             logger.warning("Answer has references but no [N] citations (query_id=%s)", query_id)
 
@@ -289,20 +318,25 @@ class RAGService:
                     full_answer.append(chunk_text)
                     yield {"event": "token", "data": json.dumps({"text": chunk_text})}
 
-            # Build references only from articles the model actually cited.
-            # `number` is the 1-indexed retrieval rank, matching [Grein N] in the prompt
-            # and the [N] markers in the answer.
+            # Build references only from articles the model actually cited, using
+            # dense 1..N_cited numbering. Tokens were streamed with the model's raw
+            # (retrieval-rank) numbers; we emit a renumbered `answer_final` event
+            # below so the client replaces its accumulated state with the corrected
+            # text.
+            number_map = _build_number_map(articles, used_ids)
             references = [
                 {
-                    "number": i + 1,
+                    "number": number_map[i + 1],
                     "id": a["id"], "title": a["title"], "source_url": a["source_url"],
                     "date": a["date"], "relevance_score": round(score_map.get(a["id"], 0), 4),
                 }
                 for i, a in enumerate(articles)
                 if a["id"] in used_ids
             ]
+
+            answer_text = _renumber_citations("".join(full_answer), number_map)
+            yield {"event": "answer_final", "data": json.dumps({"text": answer_text})}
             yield {"event": "references", "data": json.dumps({"references": references})}
-            answer_text = "".join(full_answer)
             if used_ids and not re.search(r"\[\d+\]", answer_text):
                 logger.warning("Answer has references but no [N] citations (query_id=%s)", query_id)
 

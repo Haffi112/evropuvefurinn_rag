@@ -149,6 +149,9 @@ export default function ReviewPlaygroundPage() {
       case "token":
         setAnswer((prev) => prev + (data.text as string));
         break;
+      case "answer_final":
+        setAnswer(data.text as string);
+        break;
       case "references":
         setRefs(data.references as Reference[]);
         break;
