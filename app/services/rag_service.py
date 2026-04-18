@@ -45,6 +45,109 @@ def _renumber_citations(answer_text: str, number_map: dict[int, int]) -> str:
     )
 
 
+_REFS_HEADING_RE = re.compile(
+    r"^(##\s+(?:Heimildir|References)\s*)$", re.MULTILINE
+)
+_REFS_ITEM_RE = re.compile(r"^\s*-\s*\[(\d+)\]\s*(.+?)\s*$")
+
+
+_URL_IN_TEXT_RE = re.compile(r"https?://[^\s)\]\>]+")
+
+
+def _reconcile_web_search_citations(answer: str) -> str:
+    """Repair numbering drift in web-search answers.
+
+    Models occasionally mis-number citations — an inline `[[5]](some-url)`
+    may point at a source the References list happens to label `[4]`, or
+    inline numbers outrun the references list entirely. This function
+    rebuilds both sides to a single canonical dense 1..K ordering by:
+
+    1. Parsing each `- [N] ...URL...` entry from the References section.
+    2. For each inline citation `[[N]](URL)` or bare `[N]`, resolving its
+       canonical identity — preferring URL match against References when
+       we have a URL, falling back to the inline number otherwise.
+    3. Assigning new 1..K numbers in the order citations first appear in
+       the body, then rewriting both the body and the References list to
+       match.
+
+    Returns the input unchanged if there is no References/Heimildir heading
+    or no inline citations.
+    """
+    if not answer:
+        return answer
+
+    heading_match = _REFS_HEADING_RE.search(answer)
+    if not heading_match:
+        return answer
+
+    body = answer[: heading_match.start()]
+    heading_line = heading_match.group(1).rstrip()
+    refs_section = answer[heading_match.end():]
+
+    # Parse References entries: preserve insertion order
+    ref_by_num: dict[int, str] = {}
+    refnum_by_url: dict[str, int] = {}
+    for line in refs_section.splitlines():
+        m = _REFS_ITEM_RE.match(line)
+        if not m:
+            continue
+        n = int(m.group(1))
+        text = m.group(2)
+        if n not in ref_by_num:
+            ref_by_num[n] = text
+        url_m = _URL_IN_TEXT_RE.search(text)
+        if url_m:
+            url = url_m.group(0).rstrip(".,;)'")
+            refnum_by_url.setdefault(url, n)
+
+    # Walk inline citations in order. Each one gets a canonical source number:
+    # prefer URL match against References, fall back to the inline number.
+    canonical_order: list[int] = []  # canonical refnum in first-seen order
+    citation_canonicals: list[int] = []  # parallel list for each citation token (to allow rewriting)
+
+    # Match either `[[N]](URL)` or bare `[N]` (outside of links).
+    citation_re = re.compile(r"\[\[(\d+)\]\]\((https?://[^)]+)\)|\[(\d+)\]")
+
+    tokens: list[tuple[int, int, int, int]] = []  # (start, end, inline_num, canonical_num)
+    for m in citation_re.finditer(body):
+        if m.group(1) is not None:
+            inline_n = int(m.group(1))
+            url = m.group(2).rstrip(".,;")
+            canonical = refnum_by_url.get(url, inline_n)
+        else:
+            inline_n = int(m.group(3))
+            canonical = inline_n
+        tokens.append((m.start(), m.end(), inline_n, canonical))
+        if canonical not in canonical_order:
+            canonical_order.append(canonical)
+
+    if not canonical_order:
+        return answer
+
+    canonical_to_new = {c: i + 1 for i, c in enumerate(canonical_order)}
+
+    # Rewrite body by walking tokens in reverse to preserve offsets
+    new_body = body
+    for start, end, inline_n, canonical in reversed(tokens):
+        new_n = canonical_to_new[canonical]
+        original = body[start:end]
+        # Replace the first `[<digits>]` inside the matched token (preserves
+        # any trailing `(URL)` and both outer brackets of `[[N]](URL)`)
+        replaced = re.sub(rf"\[{inline_n}\]", f"[{new_n}]", original, count=1)
+        new_body = new_body[:start] + replaced + new_body[end:]
+
+    # Rebuild References list: iterate new_num = 1..K, emit entry from the
+    # canonical source's original text if available.
+    lines = [heading_line.rstrip(), ""]
+    for new_num, canonical in enumerate(canonical_order, start=1):
+        text = ref_by_num.get(canonical)
+        if text is None:
+            text = "(source not listed)"
+        lines.append(f"- [{new_num}] {text}")
+
+    return new_body.rstrip() + "\n\n" + "\n".join(lines) + "\n"
+
+
 class RAGService:
     def __init__(self, settings: Settings, embeddings: EmbeddingService, llm: LLMService):
         self._settings = settings
@@ -90,6 +193,7 @@ class RAGService:
                 query, language, include_thinking=include_thinking,
                 model_override=model_override,
             )
+            answer_text = _reconcile_web_search_citations(answer_text)
             log_id = await self._log_query(query, answer_text, model_used,
                                            [], False, False, start_time, ip_address,
                                            reviewer_id=reviewer_id, mode="websearch")
@@ -222,9 +326,11 @@ class RAGService:
                     else:
                         full_answer.append(chunk_text)
                         yield {"event": "token", "data": json.dumps({"text": chunk_text})}
+                # Reconcile inline [N] and the Heimildir/References list
+                answer_text = _reconcile_web_search_citations("".join(full_answer))
+                yield {"event": "answer_final", "data": json.dumps({"text": answer_text})}
                 yield {"event": "references", "data": json.dumps({"references": []})}
                 yield {"event": "done", "data": json.dumps({"model_used": model_used, "cached": False, "query_id": query_id})}
-                answer_text = "".join(full_answer)
                 await self._log_query(query, answer_text, model_used,
                                       [], False, False, start_time, ip_address,
                                       reviewer_id=reviewer_id, mode="websearch")

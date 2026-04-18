@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Plus, Trash2 } from "lucide-react";
+import { Layers, Plus, Trash2, Upload } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -116,8 +116,23 @@ export default function BatchesListPage() {
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : batches.length === 0 ? (
-        <Card className="p-6 text-center text-sm text-muted-foreground">
-          No batches yet. <Link to="/batches/new" className="text-primary">Upload one</Link> to get started.
+        <Card className="flex flex-col items-center justify-center gap-5 border-dashed py-16 text-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
+            <Layers className="h-7 w-7 text-primary" />
+          </div>
+          <div className="space-y-1.5">
+            <h3 className="text-lg font-semibold">No batches yet</h3>
+            <p className="mx-auto max-w-sm text-sm text-muted-foreground">
+              Upload a JSONL file of questions to answer them in bulk via RAG and web search.
+              Each question becomes two review items.
+            </p>
+          </div>
+          <Link to="/batches/new">
+            <Button size="lg">
+              <Upload className="mr-2 h-4 w-4" />
+              Upload your first batch
+            </Button>
+          </Link>
         </Card>
       ) : (
         <Card>
