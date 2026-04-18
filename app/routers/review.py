@@ -77,6 +77,23 @@ async def list_queries(
 
 
 @router.get(
+    "/queries/next",
+    summary="Next unreviewed query",
+    description="Returns the id of a random unreviewed query_log row, preferring "
+    "queries authored by the batch user. Returns 404 if no unreviewed queries exist.",
+)
+async def get_next_unreviewed(
+    reviewer: ReviewUser = Depends(verify_review_token),
+    exclude_id: int | None = Query(default=None),
+):
+    batch_user_id = await db.get_batch_user_id()
+    next_id = await db.get_next_unreviewed_query(exclude_id, batch_user_id)
+    if next_id is None:
+        raise HTTPException(status_code=404, detail="No unreviewed queries")
+    return {"id": next_id}
+
+
+@router.get(
     "/queries/{query_id}",
     response_model=ReviewQueryDetail,
     summary="Get query detail for review",

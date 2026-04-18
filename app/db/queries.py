@@ -227,6 +227,7 @@ async def insert_query_log(
     latency_ms: int | None,
     ip_address: str | None,
     reviewer_id: int | None = None,
+    mode: str = "rag",
 ) -> int:
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -234,8 +235,8 @@ async def insert_query_log(
             """
             INSERT INTO query_log
                 (query_text, response_text, model_used, "references",
-                 scope_declined, cached, latency_ms, ip_address, reviewer_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 scope_declined, cached, latency_ms, ip_address, reviewer_id, mode)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING id
             """,
             query_text,
@@ -247,6 +248,7 @@ async def insert_query_log(
             latency_ms,
             ip_address,
             reviewer_id,
+            mode,
         )
 
 
@@ -402,7 +404,7 @@ async def list_query_logs_for_review(
         rows = await conn.fetch(
             f"""
             SELECT ql.id, ql.query_text, ql.model_used, ql.review_status,
-                   ql.cached, ql.created_at,
+                   ql.cached, ql.created_at, ql.mode,
                    ru.username AS reviewer_username,
                    su.username AS submitted_by
             FROM query_log ql
@@ -425,12 +427,49 @@ async def get_query_log_detail(query_log_id: int) -> dict | None:
             """
             SELECT id, query_text, response_text, model_used, "references",
                    scope_declined, cached, latency_ms, ip_address, created_at,
-                   review_status
+                   review_status, mode
             FROM query_log WHERE id = $1
             """,
             query_log_id,
         )
         return dict(row) if row else None
+
+
+async def get_next_unreviewed_query(
+    exclude_id: int | None, batch_user_id: int | None
+) -> int | None:
+    """Pick a random query_log row that has no review_evaluations row and is
+    not review_status='excluded'. Prefers rows attributed to the batch user
+    (ql.reviewer_id = batch_user_id) when such candidates exist; falls back to
+    any unreviewed row otherwise. Returns the id, or None if nothing available."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT ql.id
+            FROM query_log ql
+            LEFT JOIN review_evaluations re ON re.query_log_id = ql.id
+            WHERE re.id IS NULL
+              AND ql.review_status != 'excluded'
+              AND ($1::bigint IS NULL OR ql.id != $1)
+            ORDER BY (ql.reviewer_id = $2) DESC, random()
+            LIMIT 1
+            """,
+            exclude_id, batch_user_id,
+        )
+        return row["id"] if row else None
+
+
+async def delete_batch(batch_id: int) -> bool:
+    """Delete the batch and its items (ON DELETE CASCADE handles items).
+    Leaves query_log / review_evaluations / reviewed_articles intact — the
+    answered queries and any review work are preserved."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "DELETE FROM query_batches WHERE id = $1 RETURNING id", batch_id,
+        )
+        return row is not None
 
 
 async def upsert_evaluation(
@@ -660,6 +699,12 @@ async def get_all_reviewed_articles_latest() -> list[dict]:
 
 
 # ── Batch queue ──────────────────────────────────────────────
+
+async def get_batch_user_id() -> int | None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchval("SELECT id FROM review_users WHERE username = 'batch'")
+
 
 async def ensure_batch_user() -> int:
     """Seed a 'batch' review_user (idempotent) and return its id. The account

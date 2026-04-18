@@ -1,10 +1,18 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Plus } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -55,31 +63,43 @@ function ProgressBar({ done, failed, cancelled, total }: { done: number; failed:
 export default function BatchesListPage() {
   const [batches, setBatches] = useState<BatchListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deleteTarget, setDeleteTarget] = useState<BatchListItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const fetchData = async () => {
+    try {
+      const data = await apiFetch<BatchListItem[]>("/api/v1/admin/batches");
+      setBatches(data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    let cancelled = false;
-    const fetchData = async () => {
-      try {
-        const data = await apiFetch<BatchListItem[]>("/api/v1/admin/batches");
-        if (!cancelled) setBatches(data);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-
     fetchData();
     const anyRunning = () => batches.some((b) => b.status === "running");
     const interval = setInterval(() => {
       if (anyRunning()) fetchData();
     }, 10_000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await apiFetch(`/api/v1/admin/batches/${deleteTarget.id}`, { method: "DELETE" });
+      setDeleteTarget(null);
+      await fetchData();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -137,10 +157,25 @@ export default function BatchesListPage() {
                   <TableCell className="text-xs text-muted-foreground">
                     {new Date(b.created_at).toLocaleString()}
                   </TableCell>
-                  <TableCell>
-                    <Link to={`/batches/${b.id}`} className="text-sm text-primary">
-                      View
-                    </Link>
+                  <TableCell className="text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <Link to={`/batches/${b.id}`} className="text-sm text-primary hover:underline">
+                        View
+                      </Link>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setDeleteTarget(b);
+                        }}
+                        title="Delete batch"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -148,6 +183,36 @@ export default function BatchesListPage() {
           </Table>
         </Card>
       )}
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete this batch?</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  <span className="font-mono text-xs">{deleteTarget?.filename}</span>
+                  {" — "}
+                  this removes the batch grouping and all {deleteTarget?.total} queue items.
+                </p>
+                <p className="text-sm">
+                  Answered queries, reviewer evaluations, and article drafts{" "}
+                  <span className="font-medium text-foreground">are preserved</span>{" "}
+                  — they'll remain in the reviewer queue attributed to "batch".
+                </p>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
+              {deleting ? "Deleting…" : "Delete batch"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

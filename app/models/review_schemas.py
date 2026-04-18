@@ -95,6 +95,7 @@ class ReviewQueryListItem(BaseModel):
     cached: bool
     created_at: datetime
     reviewer_username: str | None
+    mode: str = "rag"  # 'rag' | 'websearch'
 
 
 class ReviewQueryListResponse(BaseModel):
@@ -117,5 +118,6 @@ class ReviewQueryDetail(BaseModel):
     ip_address: str | None
     created_at: datetime
     review_status: str
+    mode: str = "rag"  # 'rag' | 'websearch'
     evaluation: EvaluationResponse | None = None
     latest_article: ReviewedArticleResponse | None = None

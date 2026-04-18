@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import ModeBadge from "@/components/ModeBadge";
 import {
   Table,
   TableBody,
@@ -26,6 +27,7 @@ interface ReviewQueryItem {
   cached: boolean;
   created_at: string;
   reviewer_username: string | null;
+  mode: "rag" | "websearch";
 }
 
 interface ReviewQueryList {
@@ -150,6 +152,7 @@ export default function ReviewListPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Query</TableHead>
+                <TableHead className="w-24">Source</TableHead>
                 <TableHead>Model</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Reviewed by</TableHead>
@@ -165,6 +168,9 @@ export default function ReviewListPage() {
                 >
                   <TableCell className="max-w-sm truncate font-mono text-xs">
                     {q.query_text}
+                  </TableCell>
+                  <TableCell>
+                    <ModeBadge mode={q.mode} />
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className="text-xs">
@@ -189,7 +195,7 @@ export default function ReviewListPage() {
               {data?.queries.length === 0 && (
                 <TableRow>
                   <TableCell
-                    colSpan={5}
+                    colSpan={6}
                     className="text-center text-muted-foreground"
                   >
                     No queries found

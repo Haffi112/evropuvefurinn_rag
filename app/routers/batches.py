@@ -125,3 +125,15 @@ async def retry_single(batch_id: int, item_id: int):
 async def cancel(batch_id: int):
     n = await db.cancel_batch(batch_id)
     return {"cancelled": n}
+
+
+@router.delete("/{batch_id}", summary="Delete the batch (preserves answered queries)")
+async def delete_batch(batch_id: int):
+    """Removes the batch grouping and its items. Answered queries in
+    `query_log` and any review work (`review_evaluations`, `reviewed_articles`)
+    are left untouched — the batch only tracks which questions were uploaded
+    together, not the results themselves."""
+    ok = await db.delete_batch(batch_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return {"deleted": True}

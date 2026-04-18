@@ -1,11 +1,9 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { Download } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { reviewFetch, getToken } from "@review/lib/review-api";
+import { CheckCircle2, Download } from "lucide-react";
+import { ApiError, reviewFetch, getToken } from "@review/lib/review-api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import MarkdownAnswer from "@/components/MarkdownAnswer";
+import ModeBadge from "@/components/ModeBadge";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -57,6 +57,7 @@ interface QueryDetail {
   ip_address: string | null;
   created_at: string;
   review_status: string;
+  mode: "rag" | "websearch";
   evaluation: Evaluation | null;
   latest_article: ReviewedArticle | null;
 }
@@ -92,7 +93,9 @@ const DEFAULT_CHECKLIST: ChecklistState = {
 
 export default function ReviewDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [allDone, setAllDone] = useState(false);
 
   const { data, isLoading } = useQuery<QueryDetail>({
     queryKey: ["review-query", id],
@@ -100,8 +103,31 @@ export default function ReviewDetailPage() {
     enabled: !!id,
   });
 
+  useEffect(() => {
+    // Reset the "all done" banner when the user opens a fresh query
+    setAllDone(false);
+  }, [id]);
+
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ["review-query", id] });
+
+  const onEvaluationSaved = async () => {
+    invalidate();
+    if (!id) return;
+    try {
+      const next = await reviewFetch<{ id: number }>(
+        `/api/v1/review/queries/next?exclude_id=${id}`,
+      );
+      navigate(`/queries/${next.id}`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setAllDone(true);
+      } else {
+        // Unexpected — log but don't block the UI
+        console.error("Failed to fetch next query", err);
+      }
+    }
+  };
 
   if (isLoading) {
     return (
@@ -121,6 +147,7 @@ export default function ReviewDetailPage() {
       {/* ── Header ────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <h1 className="text-3xl font-bold">Query #{data.id}</h1>
+        <ModeBadge mode={data.mode} size="md" />
         <Badge
           variant={
             data.review_status === "approved"
@@ -178,10 +205,10 @@ export default function ReviewDetailPage() {
             <h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
               Response
             </h2>
-            <div className="border-l-4 border-primary pl-4 prose prose-sm max-w-none">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <div className="border-l-4 border-primary pl-4">
+              <MarkdownAnswer>
                 {data.response_text ?? "*No response*"}
-              </ReactMarkdown>
+              </MarkdownAnswer>
             </div>
           </section>
 
@@ -225,11 +252,24 @@ export default function ReviewDetailPage() {
         </div>
 
         {/* Right column: evaluation (sticky) */}
-        <div className="lg:sticky lg:top-6 lg:self-start lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+        <div className="lg:sticky lg:top-6 lg:self-start lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto space-y-3">
+          {allDone && (
+            <div className="flex items-start gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm">
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+              <div>
+                <p className="font-medium text-emerald-700 dark:text-emerald-300">
+                  You're caught up.
+                </p>
+                <p className="text-xs text-emerald-700/80 dark:text-emerald-300/80">
+                  No more unreviewed queries in the queue.
+                </p>
+              </div>
+            </div>
+          )}
           <EvaluationPanel
             queryId={data.id}
             existing={data.evaluation}
-            onSaved={invalidate}
+            onSaved={onEvaluationSaved}
           />
         </div>
       </div>
@@ -332,12 +372,12 @@ function EvaluationPanel({
           onClick={() => mutation.mutate()}
           disabled={mutation.isPending}
         >
-          {mutation.isPending ? "Saving..." : "Save Evaluation"}
+          {mutation.isPending ? "Saving..." : "Save & continue"}
         </Button>
+        <p className="text-center text-xs text-muted-foreground">
+          Saves the checklist and moves you to the next unreviewed query.
+        </p>
 
-        {mutation.isSuccess && (
-          <p className="text-sm text-green-600">Evaluation saved.</p>
-        )}
         {mutation.isError && (
           <p className="text-sm text-destructive">
             Error saving evaluation.

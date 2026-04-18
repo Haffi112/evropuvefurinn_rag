@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS query_log (
     latency_ms      INTEGER,
     ip_address      TEXT,
     reviewer_id     BIGINT,
+    mode            TEXT NOT NULL DEFAULT 'rag',  -- 'rag' | 'websearch'
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_query_log_created_at ON query_log (created_at DESC);
@@ -147,6 +148,11 @@ ALTER TABLE query_log ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAU
 ALTER TABLE articles ALTER COLUMN author DROP NOT NULL;
 
 ALTER TABLE query_log ADD COLUMN IF NOT EXISTS reviewer_id BIGINT REFERENCES review_users(id);
+
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'rag';
+UPDATE query_log
+SET mode = 'websearch'
+WHERE mode = 'rag' AND model_used LIKE '%:online';
 """
 
 

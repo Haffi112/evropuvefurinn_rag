@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, RotateCw, X } from "lucide-react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { ArrowLeft, RotateCw, Trash2, X } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -87,9 +95,11 @@ function ItemCell({ item, onRetry }: { item: BatchItem | undefined; onRetry: (id
 
 export default function BatchDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [data, setData] = useState<BatchDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const fetchBatch = useCallback(async () => {
     if (!id) return;
@@ -145,6 +155,19 @@ export default function BatchDetailPage() {
     }
   };
 
+  const handleDelete = async () => {
+    if (!id) return;
+    setActionLoading(true);
+    try {
+      await apiFetch(`/api/v1/admin/batches/${id}`, { method: "DELETE" });
+      navigate("/batches");
+    } catch (e) {
+      console.error(e);
+      setActionLoading(false);
+      setDeleteOpen(false);
+    }
+  };
+
   if (loading) return <p className="text-sm text-muted-foreground">Loading…</p>;
   if (!data) return <p className="text-sm text-destructive">Batch not found.</p>;
 
@@ -197,13 +220,50 @@ export default function BatchDetailPage() {
             </Button>
           )}
           {data.status === "running" && (
-            <Button variant="destructive" size="sm" onClick={handleCancel} disabled={actionLoading}>
+            <Button variant="outline" size="sm" onClick={handleCancel} disabled={actionLoading}>
               <X className="mr-2 h-4 w-4" />
               Cancel remaining
             </Button>
           )}
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => setDeleteOpen(true)}
+            disabled={actionLoading}
+          >
+            <Trash2 className="mr-2 h-4 w-4" />
+            Delete batch
+          </Button>
         </div>
       </div>
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete this batch?</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  This removes the batch grouping and all {data.total} queue items.
+                </p>
+                <p className="text-sm">
+                  Answered queries, reviewer evaluations, and article drafts{" "}
+                  <span className="font-medium text-foreground">are preserved</span>{" "}
+                  — they'll remain in the reviewer queue attributed to "batch".
+                </p>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={actionLoading}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={actionLoading}>
+              {actionLoading ? "Deleting…" : "Delete batch"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Overall progress */}
       <Card className="p-4">

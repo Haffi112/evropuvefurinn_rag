@@ -55,7 +55,7 @@ class RAGService:
         self, query_text: str, response_text: str | None, model_used: str | None,
         references: list | None, scope_declined: bool, cached: bool,
         start_time: float | None, ip_address: str | None,
-        reviewer_id: int | None = None,
+        reviewer_id: int | None = None, mode: str = "rag",
     ) -> int | None:
         try:
             latency_ms = round((time.monotonic() - start_time) * 1000) if start_time else None
@@ -64,7 +64,7 @@ class RAGService:
                 model_used=model_used, references=references,
                 scope_declined=scope_declined, cached=cached,
                 latency_ms=latency_ms, ip_address=ip_address,
-                reviewer_id=reviewer_id,
+                reviewer_id=reviewer_id, mode=mode,
             )
         except Exception:
             logger.warning("Failed to write query log", exc_info=True)
@@ -92,7 +92,7 @@ class RAGService:
             )
             log_id = await self._log_query(query, answer_text, model_used,
                                            [], False, False, start_time, ip_address,
-                                           reviewer_id=reviewer_id)
+                                           reviewer_id=reviewer_id, mode="websearch")
             return QueryResponse(
                 query=query, answer=answer_text, references=[],
                 model_used=model_used, cached=False, query_id=query_id,
@@ -227,7 +227,7 @@ class RAGService:
                 answer_text = "".join(full_answer)
                 await self._log_query(query, answer_text, model_used,
                                       [], False, False, start_time, ip_address,
-                                      reviewer_id=reviewer_id)
+                                      reviewer_id=reviewer_id, mode="websearch")
                 return
 
             qhash = _query_hash(query)
