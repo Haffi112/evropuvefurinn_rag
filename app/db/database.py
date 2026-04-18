@@ -101,6 +101,31 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value       TEXT NOT NULL,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS query_batches (
+    id           BIGSERIAL PRIMARY KEY,
+    filename     TEXT NOT NULL,
+    total        INTEGER NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'running',  -- 'running' | 'completed' | 'cancelled'
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS batch_items (
+    id             BIGSERIAL PRIMARY KEY,
+    batch_id       BIGINT NOT NULL REFERENCES query_batches(id) ON DELETE CASCADE,
+    question_id    TEXT NOT NULL,
+    question_text  TEXT NOT NULL,
+    mode           TEXT NOT NULL,  -- 'rag' | 'websearch'
+    status         TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'processing' | 'done' | 'failed' | 'cancelled'
+    query_log_id   BIGINT REFERENCES query_log(id),
+    error          TEXT,
+    retry_count    INTEGER NOT NULL DEFAULT 0,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_batch_items_batch_id ON batch_items (batch_id);
+CREATE INDEX IF NOT EXISTS idx_batch_items_pending ON batch_items (status) WHERE status = 'pending';
 """
 
 MIGRATION_SQL = """

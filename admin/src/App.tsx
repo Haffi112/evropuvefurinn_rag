@@ -13,6 +13,9 @@ import PlaygroundPage from "@/pages/PlaygroundPage";
 import SystemHealthPage from "@/pages/SystemHealthPage";
 import ReviewersPage from "@/pages/ReviewersPage";
 import ReviewsPage from "@/pages/ReviewsPage";
+import BatchesListPage from "@/pages/BatchesListPage";
+import BatchUploadPage from "@/pages/BatchUploadPage";
+import BatchDetailPage from "@/pages/BatchDetailPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -39,6 +42,9 @@ export default function App() {
                 <Route path="/articles/:id/edit" element={<ArticleFormPage />} />
                 <Route path="/query-log" element={<QueryLogPage />} />
                 <Route path="/playground" element={<PlaygroundPage />} />
+                <Route path="/batches" element={<BatchesListPage />} />
+                <Route path="/batches/new" element={<BatchUploadPage />} />
+                <Route path="/batches/:id" element={<BatchDetailPage />} />
                 <Route path="/system" element={<SystemHealthPage />} />
                 <Route path="/reviewers" element={<ReviewersPage />} />
                 <Route path="/reviews" element={<ReviewsPage />} />

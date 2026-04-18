@@ -56,10 +56,10 @@ class RAGService:
         references: list | None, scope_declined: bool, cached: bool,
         start_time: float | None, ip_address: str | None,
         reviewer_id: int | None = None,
-    ) -> None:
+    ) -> int | None:
         try:
             latency_ms = round((time.monotonic() - start_time) * 1000) if start_time else None
-            await db.insert_query_log(
+            return await db.insert_query_log(
                 query_text=query_text, response_text=response_text,
                 model_used=model_used, references=references,
                 scope_declined=scope_declined, cached=cached,
@@ -68,6 +68,7 @@ class RAGService:
             )
         except Exception:
             logger.warning("Failed to write query log", exc_info=True)
+            return None
 
     # ── JSON (non-streaming) mode ────────────────────────────
 
@@ -76,11 +77,12 @@ class RAGService:
         ip_address: str | None = None, start_time: float | None = None,
         score_threshold: float | None = None, include_thinking: bool = False,
         web_search: bool = False, reviewer_id: int | None = None,
-        model_override: str | None = None,
+        model_override: str | None = None, skip_cache: bool = False,
     ) -> QueryResponse:
         query_id = f"q_{uuid.uuid4().hex[:12]}"
         qhash = _query_hash(query)
         threshold = score_threshold if score_threshold is not None else self._settings.rag_score_threshold
+        bypass_cache = include_thinking or skip_cache
 
         # Web search mode — skip RAG entirely
         if web_search:
@@ -88,23 +90,23 @@ class RAGService:
                 query, language, include_thinking=include_thinking,
                 model_override=model_override,
             )
-            response = QueryResponse(
+            log_id = await self._log_query(query, answer_text, model_used,
+                                           [], False, False, start_time, ip_address,
+                                           reviewer_id=reviewer_id)
+            return QueryResponse(
                 query=query, answer=answer_text, references=[],
                 model_used=model_used, cached=False, query_id=query_id,
+                query_log_id=log_id,
             )
-            await self._log_query(query, answer_text, model_used,
-                                  [], False, False, start_time, ip_address,
-                                  reviewer_id=reviewer_id)
-            return response
 
-        # Cache check (skip when thinking — it's a debug tool)
-        if not include_thinking:
+        # Cache check (skip when thinking or skip_cache)
+        if not bypass_cache:
             cached = await db.cache_get(qhash)
             if cached:
-                resp = QueryResponse(**cached, cached=True, query_id=query_id)
-                await self._log_query(query, cached.get("answer"), cached.get("model_used"),
-                                      cached.get("references", []), False, True, start_time, ip_address)
-                return resp
+                log_id = await self._log_query(query, cached.get("answer"), cached.get("model_used"),
+                                               cached.get("references", []), False, True,
+                                               start_time, ip_address, reviewer_id=reviewer_id)
+                return QueryResponse(**cached, cached=True, query_id=query_id, query_log_id=log_id)
 
         # Scope guard
         scope = await self._llm.check_scope(query)
@@ -112,14 +114,15 @@ class RAGService:
             decline = (settings_service.get("prompt.decline_en") if language == "en"
                        else settings_service.get("prompt.decline_is"))
             flash_model = settings_service.get("model.flash_name")
-            resp = QueryResponse(
+            log_id = await self._log_query(query, decline, flash_model,
+                                           [], True, False, start_time, ip_address,
+                                           reviewer_id=reviewer_id)
+            return QueryResponse(
                 query=query, answer=decline, references=[],
                 model_used=flash_model,
                 cached=False, query_id=query_id, scope_declined=True,
+                query_log_id=log_id,
             )
-            await self._log_query(query, decline, flash_model,
-                                  [], True, False, start_time, ip_address)
-            return resp
 
         # Vector search
         matches = await self._embeddings.query(query, top_k=top_k)
@@ -128,14 +131,15 @@ class RAGService:
             no_result = (settings_service.get("prompt.no_results_en") if language == "en"
                          else settings_service.get("prompt.no_results_is"))
             flash_model = settings_service.get("model.flash_name")
-            resp = QueryResponse(
+            log_id = await self._log_query(query, no_result, flash_model,
+                                           [], False, False, start_time, ip_address,
+                                           reviewer_id=reviewer_id)
+            return QueryResponse(
                 query=query, answer=no_result,
                 references=[], model_used=flash_model,
                 cached=False, query_id=query_id,
+                query_log_id=log_id,
             )
-            await self._log_query(query, no_result, flash_model,
-                                  [], False, False, start_time, ip_address)
-            return resp
 
         # Fetch full articles, preserving vector-score order (ANY() doesn't)
         articles = await db.get_articles_by_ids(article_ids)
@@ -169,24 +173,24 @@ class RAGService:
         if used_ids and not re.search(r"\[\d+\]", answer_text):
             logger.warning("Answer has references but no [N] citations (query_id=%s)", query_id)
 
-        response = QueryResponse(
-            query=query, answer=answer_text, references=references,
-            model_used=model_used, cached=False, query_id=query_id,
-        )
-
-        # Store in cache (skip when thinking)
-        if not include_thinking:
-            cache_data = response.model_dump()
-            cache_data.pop("cached", None)
-            cache_data.pop("query_id", None)
-            refs_dicts = [r.model_dump() for r in references]
-            cache_data["references"] = refs_dicts
+        # Store in cache (skip when thinking or skip_cache)
+        if not bypass_cache:
+            cache_data = {
+                "query": query, "answer": answer_text,
+                "references": [r.model_dump() for r in references],
+                "model_used": model_used,
+            }
             await db.cache_store(qhash, query, cache_data, article_ids, self._settings.query_cache_ttl_hours)
 
-        await self._log_query(query, answer_text, model_used,
-                              [r.model_dump() for r in references], False, False, start_time, ip_address,
-                              reviewer_id=reviewer_id)
-        return response
+        log_id = await self._log_query(query, answer_text, model_used,
+                                       [r.model_dump() for r in references],
+                                       False, False, start_time, ip_address,
+                                       reviewer_id=reviewer_id)
+        return QueryResponse(
+            query=query, answer=answer_text, references=references,
+            model_used=model_used, cached=False, query_id=query_id,
+            query_log_id=log_id,
+        )
 
     # ── SSE (streaming) mode ─────────────────────────────────
 
@@ -195,10 +199,11 @@ class RAGService:
         ip_address: str | None = None, start_time: float | None = None,
         score_threshold: float | None = None, include_thinking: bool = False,
         web_search: bool = False, reviewer_id: int | None = None,
-        model_override: str | None = None,
+        model_override: str | None = None, skip_cache: bool = False,
     ):
         """Yields dicts with 'event' and 'data' keys for sse-starlette."""
         query_id = f"q_{uuid.uuid4().hex[:12]}"
+        bypass_cache = include_thinking or skip_cache
 
         try:
             # Web search mode — skip RAG entirely
@@ -228,8 +233,8 @@ class RAGService:
             qhash = _query_hash(query)
             threshold = score_threshold if score_threshold is not None else self._settings.rag_score_threshold
 
-            # Cache check (skip when thinking — it's a debug tool)
-            if not include_thinking:
+            # Cache check (skip when thinking or skip_cache)
+            if not bypass_cache:
                 cached = await db.cache_get(qhash)
                 if cached:
                     yield {"event": "status", "data": json.dumps({"stage": "complete", "message": "Cached response"})}
@@ -346,8 +351,8 @@ class RAGService:
                 "data": json.dumps({"model_used": model_used, "cached": False, "query_id": query_id}),
             }
 
-            # Store in cache (skip when thinking)
-            if not include_thinking:
+            # Store in cache (skip when thinking or skip_cache)
+            if not bypass_cache:
                 cache_data = {
                     "query": query, "answer": answer_text, "references": references,
                     "model_used": model_used,

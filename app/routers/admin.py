@@ -3,11 +3,13 @@ import io
 import json
 import logging
 import re
+import time
 import zipfile
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from sse_starlette.sse import EventSourceResponse
 
 from app.db import queries as db
 from app.middleware.auth import verify_api_key
@@ -17,6 +19,7 @@ from app.models.schemas import (
     QueryLogEntry,
     QueryLogListResponse,
     QueryLogStatsResponse,
+    ReviewPlaygroundRequest,
 )
 from app.models.review_schemas import (
     ReviewPasswordReset,
@@ -24,6 +27,7 @@ from app.models.review_schemas import (
     ReviewUserCreate,
     ReviewUserResponse,
 )
+from app.services.rag_service import RAGService
 
 logger = logging.getLogger(__name__)
 
@@ -376,3 +380,46 @@ async def export_articles_zip():
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="reviewed_articles.zip"'},
     )
+
+
+# ── Admin playground (parity with reviewer playground) ──────
+
+def _get_rag(request: Request) -> RAGService:
+    return request.app.state.rag
+
+
+@router.post(
+    "/playground",
+    summary="Admin playground query",
+    description="Submit a query from the admin playground. Logged without reviewer attribution. "
+    "Supports web search mode (bypasses RAG) and SSE streaming.",
+)
+async def admin_playground(body: ReviewPlaygroundRequest, request: Request):
+    rag = _get_rag(request)
+    ip_address = request.client.host if request.client else None
+    start_time = time.monotonic()
+
+    if body.stream:
+        return EventSourceResponse(
+            rag.process_query_stream(
+                body.query, body.top_k, body.language,
+                ip_address=ip_address, start_time=start_time,
+                score_threshold=body.score_threshold,
+                include_thinking=body.include_thinking,
+                web_search=body.web_search,
+                model_override=body.model,
+            )
+        )
+
+    try:
+        return await rag.process_query_json(
+            body.query, body.top_k, body.language,
+            ip_address=ip_address, start_time=start_time,
+            score_threshold=body.score_threshold,
+            include_thinking=body.include_thinking,
+            web_search=body.web_search,
+            model_override=body.model,
+        )
+    except Exception:
+        logger.error("Admin playground query failed", exc_info=True)
+        raise HTTPException(status_code=500, detail="Villa kom upp við úrvinnslu fyrirspurnar.")

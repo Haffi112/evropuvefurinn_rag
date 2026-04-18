@@ -141,6 +141,7 @@ class QueryResponse(BaseModel):
     model_used: str = Field(description="LLM model that generated the answer (e.g. 'google/gemini-3.1-pro-preview').")
     cached: bool = Field(default=False, description="Whether this answer was served from cache.")
     query_id: str = Field(description="Unique identifier for this query (for logging/debugging).")
+    query_log_id: int | None = Field(default=None, description="Primary key of the persisted query_log row (null if logging failed).")
     scope_declined: bool = Field(default=False, description="True if the query was outside the EU/Iceland scope and was declined.")
 
 
@@ -233,3 +234,51 @@ class ErrorDetail(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorDetail
+
+
+# ── Batch schemas ────────────────────────────────────────────
+
+class BatchCreateResponse(BaseModel):
+    id: int
+    filename: str
+    total: int
+    skipped: int = 0
+    skipped_reasons: list[str] = []
+
+
+class BatchListItem(BaseModel):
+    id: int
+    filename: str
+    total: int
+    status: str  # 'running' | 'completed' | 'cancelled'
+    done: int
+    failed: int
+    pending: int
+    processing: int
+    cancelled: int
+    created_at: datetime
+    completed_at: datetime | None = None
+
+
+class BatchItemDetail(BaseModel):
+    id: int
+    batch_id: int
+    question_id: str
+    question_text: str
+    mode: str  # 'rag' | 'websearch'
+    status: str  # 'pending' | 'processing' | 'done' | 'failed' | 'cancelled'
+    query_log_id: int | None = None
+    error: str | None = None
+    retry_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class BatchDetail(BaseModel):
+    id: int
+    filename: str
+    total: int
+    status: str
+    created_at: datetime
+    completed_at: datetime | None = None
+    items: list[BatchItemDetail]

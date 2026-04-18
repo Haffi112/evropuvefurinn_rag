@@ -8,10 +8,12 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
+from app.db import queries as db
 from app.db.database import close_pool, init_pool
 from app.middleware.rate_limit import setup_rate_limiting
-from app.routers import admin, articles, health, query, review
+from app.routers import admin, articles, batches, health, query, review
 from app.routers import settings as settings_router
+from app.services.batch_worker import BatchWorker
 from app.services.llm_service import LLMService
 from app.services.embedding_service import EmbeddingService
 from app.services.rag_service import RAGService
@@ -49,10 +51,17 @@ async def lifespan(app: FastAPI):
     rag = RAGService(settings, emb, llm)
     app.state.rag = rag
 
+    # Seed the attribution user for batch queries and start the background worker
+    batch_user_id = await db.ensure_batch_user()
+    worker = BatchWorker(rag, batch_user_id)
+    await worker.start()
+    app.state.batch_worker = worker
+
     logger.info("Application started (env=%s)", settings.app_env)
     yield
 
     # Shutdown
+    await worker.stop()
     await llm.close()
     await emb.close()
     await close_pool()
@@ -145,6 +154,7 @@ def create_app() -> FastAPI:
     app.include_router(admin.router)
     app.include_router(review.router)
     app.include_router(settings_router.router)
+    app.include_router(batches.router)
 
     # Admin SPA static assets (only mount if directory exists)
     assets_dir = STATIC_DIR / "assets"

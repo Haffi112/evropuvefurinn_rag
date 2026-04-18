@@ -657,3 +657,268 @@ async def get_all_reviewed_articles_latest() -> list[dict]:
                 d["references"] = json.loads(refs)
             result.append(d)
         return result
+
+
+# ── Batch queue ──────────────────────────────────────────────
+
+async def ensure_batch_user() -> int:
+    """Seed a 'batch' review_user (idempotent) and return its id. The account
+    has a random locked password hash so it cannot log in."""
+    import secrets
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO review_users (username, password_hash, is_active)
+            VALUES ('batch', $1, true)
+            ON CONFLICT (username) DO NOTHING
+            """,
+            "locked:" + secrets.token_hex(16),
+        )
+        return await conn.fetchval("SELECT id FROM review_users WHERE username = 'batch'")
+
+
+async def create_batch(filename: str, total: int) -> int:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            """
+            INSERT INTO query_batches (filename, total)
+            VALUES ($1, $2)
+            RETURNING id
+            """,
+            filename, total,
+        )
+
+
+async def insert_batch_items(batch_id: int, items: list[dict]) -> None:
+    """items = [{question_id, question_text, mode}, ...]"""
+    if not items:
+        return
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            """
+            INSERT INTO batch_items (batch_id, question_id, question_text, mode)
+            VALUES ($1, $2, $3, $4)
+            """,
+            [(batch_id, i["question_id"], i["question_text"], i["mode"]) for i in items],
+        )
+
+
+async def claim_next_batch_item() -> dict | None:
+    """Atomically move the next pending item to 'processing'. Single-worker
+    usage; no SKIP LOCKED needed."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE batch_items
+            SET status = 'processing', updated_at = now()
+            WHERE id = (
+                SELECT id FROM batch_items
+                WHERE status = 'pending'
+                ORDER BY id
+                LIMIT 1
+            )
+            RETURNING *
+            """
+        )
+        return dict(row) if row else None
+
+
+async def reset_stale_processing() -> int:
+    """On startup, reset any items stuck in 'processing' back to 'pending'.
+    Safe under single-worker assumption. Returns count reset."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            WITH reset AS (
+                UPDATE batch_items SET status = 'pending', updated_at = now()
+                WHERE status = 'processing'
+                RETURNING id
+            )
+            SELECT COUNT(*) AS n FROM reset
+            """
+        )
+        return row["n"] if row else 0
+
+
+async def complete_batch_item(item_id: int, query_log_id: int) -> None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE batch_items
+            SET status = 'done', query_log_id = $2, updated_at = now(), error = NULL
+            WHERE id = $1
+            """,
+            item_id, query_log_id,
+        )
+
+
+async def fail_batch_item(item_id: int, error: str) -> None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE batch_items
+            SET status = 'failed', error = $2, updated_at = now()
+            WHERE id = $1
+            """,
+            item_id, error[:2000],
+        )
+
+
+async def requeue_batch_item(item_id: int, retry_count: int, error: str | None) -> None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE batch_items
+            SET status = 'pending', retry_count = $2, error = $3, updated_at = now()
+            WHERE id = $1
+            """,
+            item_id, retry_count, (error or "")[:2000],
+        )
+
+
+async def try_complete_batch(batch_id: int) -> bool:
+    """If no pending/processing items remain in the batch, mark it completed.
+    Returns True if the batch was just completed."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE query_batches
+            SET status = 'completed', completed_at = now()
+            WHERE id = $1 AND status = 'running'
+              AND NOT EXISTS (
+                  SELECT 1 FROM batch_items
+                  WHERE batch_id = $1 AND status IN ('pending', 'processing')
+              )
+            RETURNING id
+            """,
+            batch_id,
+        )
+        return row is not None
+
+
+async def list_batches() -> list[dict]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT b.id, b.filename, b.total, b.status,
+                   b.created_at, b.completed_at,
+                   COUNT(*) FILTER (WHERE i.status = 'done') AS done,
+                   COUNT(*) FILTER (WHERE i.status = 'failed') AS failed,
+                   COUNT(*) FILTER (WHERE i.status = 'pending') AS pending,
+                   COUNT(*) FILTER (WHERE i.status = 'processing') AS processing,
+                   COUNT(*) FILTER (WHERE i.status = 'cancelled') AS cancelled
+            FROM query_batches b
+            LEFT JOIN batch_items i ON i.batch_id = b.id
+            GROUP BY b.id
+            ORDER BY b.id DESC
+            """
+        )
+        return [dict(r) for r in rows]
+
+
+async def get_batch_detail(batch_id: int) -> dict | None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        batch = await conn.fetchrow(
+            "SELECT * FROM query_batches WHERE id = $1", batch_id,
+        )
+        if not batch:
+            return None
+        items = await conn.fetch(
+            "SELECT * FROM batch_items WHERE batch_id = $1 ORDER BY id",
+            batch_id,
+        )
+        return {"batch": dict(batch), "items": [dict(r) for r in items]}
+
+
+async def retry_failed_batch_items(batch_id: int) -> int:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            WITH updated AS (
+                UPDATE batch_items
+                SET status = 'pending', retry_count = 0, error = NULL, updated_at = now()
+                WHERE batch_id = $1 AND status = 'failed'
+                RETURNING id
+            )
+            SELECT COUNT(*) AS n FROM updated
+            """,
+            batch_id,
+        )
+        # Also re-open the batch if it had been marked completed
+        await conn.execute(
+            """
+            UPDATE query_batches SET status = 'running', completed_at = NULL
+            WHERE id = $1 AND status = 'completed'
+              AND EXISTS (
+                  SELECT 1 FROM batch_items
+                  WHERE batch_id = $1 AND status IN ('pending', 'processing')
+              )
+            """,
+            batch_id,
+        )
+        return row["n"] if row else 0
+
+
+async def retry_batch_item(item_id: int) -> bool:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE batch_items
+            SET status = 'pending', retry_count = 0, error = NULL, updated_at = now()
+            WHERE id = $1 AND status = 'failed'
+            RETURNING batch_id
+            """,
+            item_id,
+        )
+        if not row:
+            return False
+        # Re-open the batch if needed
+        await conn.execute(
+            """
+            UPDATE query_batches SET status = 'running', completed_at = NULL
+            WHERE id = $1 AND status = 'completed'
+            """,
+            row["batch_id"],
+        )
+        return True
+
+
+async def cancel_batch(batch_id: int) -> int:
+    """Cancel pending items and mark batch cancelled. Items in 'processing'
+    are left alone (will finish); on their completion, try_complete_batch
+    updates the batch status."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            WITH updated AS (
+                UPDATE batch_items
+                SET status = 'cancelled', updated_at = now()
+                WHERE batch_id = $1 AND status = 'pending'
+                RETURNING id
+            )
+            SELECT COUNT(*) AS n FROM updated
+            """,
+            batch_id,
+        )
+        await conn.execute(
+            """
+            UPDATE query_batches SET status = 'cancelled', completed_at = now()
+            WHERE id = $1 AND status = 'running'
+            """,
+            batch_id,
+        )
+        return row["n"] if row else 0
