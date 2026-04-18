@@ -1,10 +1,11 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { ClipboardList, LogOut, MessageSquare } from "lucide-react";
+import { BarChart3, ClipboardList, LogOut, MessageSquare } from "lucide-react";
 import { useReviewAuth } from "@review/hooks/use-review-auth";
 import { Button } from "@/components/ui/button";
 
 const NAV_ITEMS = [
   { to: "/queries", label: "Queries", icon: ClipboardList },
+  { to: "/stats", label: "My stats", icon: BarChart3 },
   { to: "/playground", label: "Playground", icon: MessageSquare },
 ] as const;
 

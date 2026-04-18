@@ -94,6 +94,17 @@ async def get_next_unreviewed(
 
 
 @router.get(
+    "/stats",
+    summary="Reviewer's own stats",
+    description="Personal review metrics for the signed-in reviewer.",
+)
+async def get_reviewer_stats(
+    reviewer: ReviewUser = Depends(verify_review_token),
+):
+    return await db.get_reviewer_stats(reviewer.id)
+
+
+@router.get(
     "/queries/{query_id}",
     response_model=ReviewQueryDetail,
     summary="Get query detail for review",
@@ -142,6 +153,7 @@ async def evaluate_query(
         reviewer_id=reviewer.id,
         checklist=checklist_dict,
         note=body.note,
+        duration_seconds=body.duration_seconds,
     )
 
     # Auto-set review_status

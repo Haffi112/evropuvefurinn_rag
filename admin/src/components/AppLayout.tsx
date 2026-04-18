@@ -1,6 +1,7 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   Activity,
+  BarChart3,
   ClipboardCheck,
   FileText,
   History,
@@ -22,6 +23,7 @@ const NAV_ITEMS = [
   { to: "/system", label: "System", icon: Activity },
   { to: "/reviewers", label: "Reviewers", icon: Users },
   { to: "/reviews", label: "Reviews", icon: ClipboardCheck },
+  { to: "/review-progress", label: "Review progress", icon: BarChart3 },
 ] as const;
 
 export default function AppLayout() {

@@ -472,23 +472,210 @@ async def delete_batch(batch_id: int) -> bool:
         return row is not None
 
 
+# ── Stats (reviewer + admin) ────────────────────────────────
+
+async def get_reviewer_stats(reviewer_id: int) -> dict:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        totals = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE created_at >= now() - interval '7 days') AS this_week,
+                COUNT(*) FILTER (WHERE created_at >= date_trunc('day', now())) AS today,
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_seconds)
+                    FILTER (WHERE duration_seconds IS NOT NULL) AS median_duration,
+                AVG(duration_seconds) FILTER (WHERE duration_seconds IS NOT NULL) AS avg_duration,
+                SUM(duration_seconds) AS total_duration
+            FROM review_evaluations
+            WHERE reviewer_id = $1
+            """,
+            reviewer_id,
+        )
+
+        queue_remaining = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM query_log ql
+            LEFT JOIN review_evaluations re ON re.query_log_id = ql.id
+            WHERE re.id IS NULL AND ql.review_status != 'excluded'
+            """
+        )
+
+        daily_rows = await conn.fetch(
+            """
+            SELECT date_trunc('day', created_at)::date AS day, COUNT(*) AS count
+            FROM review_evaluations
+            WHERE reviewer_id = $1 AND created_at >= now() - interval '30 days'
+            GROUP BY 1 ORDER BY 1
+            """,
+            reviewer_id,
+        )
+
+        mode_rows = await conn.fetch(
+            """
+            SELECT ql.mode AS mode, COUNT(*) AS count
+            FROM review_evaluations re
+            JOIN query_log ql ON ql.id = re.query_log_id
+            WHERE re.reviewer_id = $1
+            GROUP BY ql.mode
+            """,
+            reviewer_id,
+        )
+
+        # Checklist pass rates: pull all checklists for this reviewer and aggregate
+        checklists = await conn.fetch(
+            "SELECT checklist FROM review_evaluations WHERE reviewer_id = $1",
+            reviewer_id,
+        )
+        pass_rates: dict[str, dict] = {}
+        for row in checklists:
+            cl = row["checklist"]
+            if isinstance(cl, str):
+                cl = json.loads(cl)
+            for k, v in cl.items():
+                entry = pass_rates.setdefault(k, {"true": 0, "total": 0})
+                entry["total"] += 1
+                if v is True:
+                    entry["true"] += 1
+
+        recent_rows = await conn.fetch(
+            """
+            SELECT re.query_log_id, ql.query_text, ql.mode, ql.review_status,
+                   re.duration_seconds, re.created_at
+            FROM review_evaluations re
+            JOIN query_log ql ON ql.id = re.query_log_id
+            WHERE re.reviewer_id = $1
+            ORDER BY re.created_at DESC
+            LIMIT 5
+            """,
+            reviewer_id,
+        )
+
+    return {
+        "total": totals["total"],
+        "this_week": totals["this_week"],
+        "today": totals["today"],
+        "median_duration_seconds": float(totals["median_duration"]) if totals["median_duration"] is not None else None,
+        "avg_duration_seconds": float(totals["avg_duration"]) if totals["avg_duration"] is not None else None,
+        "total_duration_seconds": int(totals["total_duration"]) if totals["total_duration"] is not None else 0,
+        "queue_remaining": queue_remaining,
+        "daily_activity": [{"day": r["day"].isoformat(), "count": r["count"]} for r in daily_rows],
+        "mode_split": [{"mode": r["mode"], "count": r["count"]} for r in mode_rows],
+        "checklist_pass_rates": [
+            {"key": k, "true_count": v["true"], "total": v["total"],
+             "rate": round(100.0 * v["true"] / v["total"], 1) if v["total"] else 0.0}
+            for k, v in pass_rates.items()
+        ],
+        "recent": [dict(r) for r in recent_rows],
+    }
+
+
+async def get_admin_review_stats() -> dict:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        status_rows = await conn.fetch(
+            """
+            SELECT review_status, COUNT(*) AS count
+            FROM query_log
+            GROUP BY review_status
+            """
+        )
+
+        weekly_rows = await conn.fetch(
+            """
+            SELECT date_trunc('day', created_at)::date AS day, COUNT(*) AS count
+            FROM review_evaluations
+            WHERE created_at >= now() - interval '30 days'
+            GROUP BY 1 ORDER BY 1
+            """
+        )
+
+        reviewer_rows = await conn.fetch(
+            """
+            SELECT u.id, u.username,
+                   COUNT(re.id) AS reviews,
+                   AVG(re.duration_seconds) FILTER (WHERE re.duration_seconds IS NOT NULL) AS avg_duration,
+                   SUM(re.duration_seconds) AS total_duration,
+                   MAX(re.created_at) AS last_activity
+            FROM review_users u
+            LEFT JOIN review_evaluations re ON re.reviewer_id = u.id
+            WHERE u.username != 'batch'  -- exclude the system attribution user
+            GROUP BY u.id, u.username
+            ORDER BY COUNT(re.id) DESC, u.username
+            """
+        )
+
+        oldest_pending = await conn.fetch(
+            """
+            SELECT ql.id, ql.query_text, ql.mode, ql.created_at,
+                   su.username AS submitted_by
+            FROM query_log ql
+            LEFT JOIN review_evaluations re ON re.query_log_id = ql.id
+            LEFT JOIN review_users su ON su.id = ql.reviewer_id
+            WHERE re.id IS NULL AND ql.review_status != 'excluded'
+            ORDER BY ql.created_at ASC
+            LIMIT 10
+            """
+        )
+
+        totals = await conn.fetchrow(
+            """
+            SELECT COUNT(*) AS total_evaluations,
+                   AVG(duration_seconds) FILTER (WHERE duration_seconds IS NOT NULL) AS avg_duration,
+                   SUM(duration_seconds) AS total_duration
+            FROM review_evaluations
+            """
+        )
+
+    return {
+        "status_counts": [{"status": r["review_status"], "count": r["count"]} for r in status_rows],
+        "weekly_activity": [{"day": r["day"].isoformat(), "count": r["count"]} for r in weekly_rows],
+        "reviewers": [
+            {
+                "id": r["id"],
+                "username": r["username"],
+                "reviews": r["reviews"],
+                "avg_duration_seconds": float(r["avg_duration"]) if r["avg_duration"] is not None else None,
+                "total_duration_seconds": int(r["total_duration"]) if r["total_duration"] is not None else 0,
+                "last_activity": r["last_activity"].isoformat() if r["last_activity"] else None,
+            }
+            for r in reviewer_rows
+        ],
+        "oldest_pending": [
+            {
+                "id": r["id"],
+                "query_text": r["query_text"],
+                "mode": r["mode"],
+                "created_at": r["created_at"].isoformat(),
+                "submitted_by": r["submitted_by"],
+            }
+            for r in oldest_pending
+        ],
+        "total_evaluations": totals["total_evaluations"],
+        "avg_duration_seconds": float(totals["avg_duration"]) if totals["avg_duration"] is not None else None,
+        "total_duration_seconds": int(totals["total_duration"]) if totals["total_duration"] is not None else 0,
+    }
+
+
 async def upsert_evaluation(
-    query_log_id: int, reviewer_id: int, checklist: dict, note: str | None
+    query_log_id: int, reviewer_id: int, checklist: dict, note: str | None,
+    duration_seconds: int | None = None,
 ) -> dict:
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO review_evaluations (query_log_id, reviewer_id, checklist, note)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO review_evaluations (query_log_id, reviewer_id, checklist, note, duration_seconds)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (query_log_id) DO UPDATE SET
                 reviewer_id = EXCLUDED.reviewer_id,
                 checklist = EXCLUDED.checklist,
                 note = EXCLUDED.note,
+                duration_seconds = COALESCE(EXCLUDED.duration_seconds, review_evaluations.duration_seconds),
                 updated_at = now()
             RETURNING *
             """,
-            query_log_id, reviewer_id, json.dumps(checklist), note,
+            query_log_id, reviewer_id, json.dumps(checklist), note, duration_seconds,
         )
         return dict(row)
 

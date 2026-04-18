@@ -54,6 +54,7 @@ class EvaluationChecklist(BaseModel):
 class EvaluationCreate(BaseModel):
     checklist: EvaluationChecklist
     note: str | None = None
+    duration_seconds: int | None = None
 
 
 class EvaluationResponse(BaseModel):
@@ -62,6 +63,7 @@ class EvaluationResponse(BaseModel):
     reviewer_id: int
     checklist: EvaluationChecklist
     note: str | None
+    duration_seconds: int | None = None
     created_at: datetime
     updated_at: datetime | None
 

@@ -76,13 +76,14 @@ CREATE TABLE IF NOT EXISTS review_users (
 );
 
 CREATE TABLE IF NOT EXISTS review_evaluations (
-    id            BIGSERIAL PRIMARY KEY,
-    query_log_id  BIGINT NOT NULL REFERENCES query_log(id) UNIQUE,
-    reviewer_id   INT NOT NULL REFERENCES review_users(id),
-    checklist     JSONB NOT NULL,
-    note          TEXT,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ
+    id               BIGSERIAL PRIMARY KEY,
+    query_log_id     BIGINT NOT NULL REFERENCES query_log(id) UNIQUE,
+    reviewer_id      INT NOT NULL REFERENCES review_users(id),
+    checklist        JSONB NOT NULL,
+    note             TEXT,
+    duration_seconds INT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS reviewed_articles (
@@ -153,6 +154,8 @@ ALTER TABLE query_log ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'rag';
 UPDATE query_log
 SET mode = 'websearch'
 WHERE mode = 'rag' AND model_used LIKE '%:online';
+
+ALTER TABLE review_evaluations ADD COLUMN IF NOT EXISTS duration_seconds INT;
 """
 
 

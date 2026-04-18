@@ -382,6 +382,18 @@ async def export_articles_zip():
     )
 
 
+# ── Review progress analytics ───────────────────────────────
+
+@router.get(
+    "/review-stats",
+    summary="Admin review progress overview",
+    description="Aggregate stats for the admin review progress dashboard: "
+    "status counts, weekly activity, per-reviewer leaderboard, oldest pending.",
+)
+async def admin_review_stats():
+    return await db.get_admin_review_stats()
+
+
 # ── Admin playground (parity with reviewer playground) ──────
 
 def _get_rag(request: Request) -> RAGService:

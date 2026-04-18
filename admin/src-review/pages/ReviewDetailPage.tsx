@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { CheckCircle2, Download } from "lucide-react";
+import { CheckCircle2, Download, SkipForward } from "lucide-react";
 import { ApiError, reviewFetch, getToken } from "@review/lib/review-api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import MarkdownAnswer from "@/components/MarkdownAnswer";
 import ModeBadge from "@/components/ModeBadge";
+import { useActiveDuration } from "@/hooks/use-active-duration";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -111,8 +112,7 @@ export default function ReviewDetailPage() {
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ["review-query", id] });
 
-  const onEvaluationSaved = async () => {
-    invalidate();
+  const goToNext = async () => {
     if (!id) return;
     try {
       const next = await reviewFetch<{ id: number }>(
@@ -123,10 +123,14 @@ export default function ReviewDetailPage() {
       if (err instanceof ApiError && err.status === 404) {
         setAllDone(true);
       } else {
-        // Unexpected — log but don't block the UI
         console.error("Failed to fetch next query", err);
       }
     }
+  };
+
+  const onEvaluationSaved = async () => {
+    invalidate();
+    await goToNext();
   };
 
   if (isLoading) {
@@ -267,9 +271,11 @@ export default function ReviewDetailPage() {
             </div>
           )}
           <EvaluationPanel
+            key={data.id}
             queryId={data.id}
             existing={data.evaluation}
             onSaved={onEvaluationSaved}
+            onSkip={goToNext}
           />
         </div>
       </div>
@@ -293,15 +299,18 @@ function EvaluationPanel({
   queryId,
   existing,
   onSaved,
+  onSkip,
 }: {
   queryId: number;
   existing: Evaluation | null;
   onSaved: () => void;
+  onSkip: () => void;
 }) {
   const [checklist, setChecklist] = useState<ChecklistState>(
     existing?.checklist ?? DEFAULT_CHECKLIST,
   );
   const [note, setNote] = useState(existing?.note ?? "");
+  const duration = useActiveDuration();
 
   useEffect(() => {
     if (existing) {
@@ -314,7 +323,11 @@ function EvaluationPanel({
     mutationFn: () =>
       reviewFetch(`/api/v1/review/queries/${queryId}/evaluate`, {
         method: "POST",
-        body: JSON.stringify({ checklist, note: note || null }),
+        body: JSON.stringify({
+          checklist,
+          note: note || null,
+          duration_seconds: duration.get(),
+        }),
       }),
     onSuccess: onSaved,
   });
@@ -367,15 +380,26 @@ function EvaluationPanel({
           />
         </div>
 
-        <Button
-          className="w-full"
-          onClick={() => mutation.mutate()}
-          disabled={mutation.isPending}
-        >
-          {mutation.isPending ? "Saving..." : "Save & continue"}
-        </Button>
+        <div className="space-y-2">
+          <Button
+            className="w-full"
+            onClick={() => mutation.mutate()}
+            disabled={mutation.isPending}
+          >
+            {mutation.isPending ? "Saving..." : "Save & continue"}
+          </Button>
+          <Button
+            variant="ghost"
+            className="w-full text-muted-foreground hover:text-foreground"
+            onClick={onSkip}
+            disabled={mutation.isPending}
+          >
+            <SkipForward className="mr-2 h-4 w-4" />
+            Skip without saving
+          </Button>
+        </div>
         <p className="text-center text-xs text-muted-foreground">
-          Saves the checklist and moves you to the next unreviewed query.
+          Save records your checklist; Skip jumps to another unreviewed query.
         </p>
 
         {mutation.isError && (

@@ -6,6 +6,7 @@ import ReviewLoginPage from "@review/pages/ReviewLoginPage";
 import ReviewListPage from "@review/pages/ReviewListPage";
 import ReviewDetailPage from "@review/pages/ReviewDetailPage";
 import ReviewPlaygroundPage from "@review/pages/ReviewPlaygroundPage";
+import ReviewerStatsPage from "@review/pages/ReviewerStatsPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -34,6 +35,7 @@ export default function App() {
                 <Route path="/queries" element={<ReviewListPage />} />
                 <Route path="/queries/:id" element={<ReviewDetailPage />} />
                 <Route path="/playground" element={<ReviewPlaygroundPage />} />
+                <Route path="/stats" element={<ReviewerStatsPage />} />
               </Route>
             </Route>
             <Route path="*" element={<Navigate to="/queries" replace />} />
