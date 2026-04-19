@@ -133,18 +133,14 @@ CREATE TABLE IF NOT EXISTS flagged_references (
     CONSTRAINT flagged_references_flag_type_check
         CHECK (flag_type IN ('outdated', 'irrelevant', 'untrustworthy'))
 );
--- One OPEN flag per reviewer per identifier (article_id OR url).
--- Two partial indexes so each identifier type is enforced independently.
+-- article_id indexes. URL-dependent indexes live in MIGRATION_SQL because
+-- they reference the `url` column which on older deploys is added by
+-- ALTER after this block runs.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_flagged_references_unique_article_open
     ON flagged_references (article_id, reviewer_id)
     WHERE article_id IS NOT NULL AND resolved_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_flagged_references_unique_url_open
-    ON flagged_references (url, reviewer_id)
-    WHERE url IS NOT NULL AND resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_flagged_references_article
     ON flagged_references (article_id) WHERE article_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_flagged_references_url
-    ON flagged_references (url) WHERE url IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_flagged_references_created
     ON flagged_references (created_at DESC);
 
