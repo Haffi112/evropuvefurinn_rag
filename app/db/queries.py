@@ -232,12 +232,21 @@ async def insert_query_log(
 ) -> int:
     pool = get_pool()
     async with pool.acquire() as conn:
+        # Empty-answer rows are kept for telemetry but routed straight to
+        # `excluded` so they never reach the reviewer queue. Non-empty rows
+        # fall back to the column default ('pending'). The batch worker
+        # treats empty answers as retriable failures, so every retry attempt
+        # logs its own row — without this, each retry would leave an
+        # orphaned blank entry in the reviewer queue.
         return await conn.fetchval(
             """
             INSERT INTO query_log
                 (query_text, response_text, model_used, "references",
-                 scope_declined, cached, latency_ms, ip_address, reviewer_id, mode)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                 scope_declined, cached, latency_ms, ip_address,
+                 reviewer_id, mode, review_status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                    CASE WHEN $2 IS NULL OR trim($2) = ''
+                         THEN 'excluded' ELSE 'pending' END)
             RETURNING id
             """,
             query_text,
