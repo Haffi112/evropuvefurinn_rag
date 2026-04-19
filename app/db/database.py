@@ -156,6 +156,12 @@ SET mode = 'websearch'
 WHERE mode = 'rag' AND model_used LIKE '%:online';
 
 ALTER TABLE review_evaluations ADD COLUMN IF NOT EXISTS duration_seconds INT;
+
+-- Backfill new checklist key so existing evaluations show false (not missing)
+-- for the 'publishable_minor_edits' criterion introduced after launch.
+UPDATE review_evaluations
+SET checklist = checklist || '{"publishable_minor_edits": false}'::jsonb
+WHERE NOT (checklist ? 'publishable_minor_edits');
 """
 
 

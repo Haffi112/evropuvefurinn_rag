@@ -70,6 +70,7 @@ interface ChecklistState {
   no_hallucinations: boolean;
   appropriate_scope: boolean;
   language_quality: boolean;
+  publishable_minor_edits: boolean;
 }
 
 const CHECKLIST_LABELS: Record<keyof ChecklistState, string> = {
@@ -79,6 +80,7 @@ const CHECKLIST_LABELS: Record<keyof ChecklistState, string> = {
   no_hallucinations: "No hallucinations?",
   appropriate_scope: "Appropriate scope (EU/Iceland)?",
   language_quality: "Language quality acceptable?",
+  publishable_minor_edits: "Publishable with minor edits?",
 };
 
 const DEFAULT_CHECKLIST: ChecklistState = {
@@ -88,6 +90,7 @@ const DEFAULT_CHECKLIST: ChecklistState = {
   no_hallucinations: false,
   appropriate_scope: false,
   language_quality: false,
+  publishable_minor_edits: false,
 };
 
 // ── Component ──────────────────────────────────────────────
@@ -307,14 +310,16 @@ function EvaluationPanel({
   onSkip: () => void;
 }) {
   const [checklist, setChecklist] = useState<ChecklistState>(
-    existing?.checklist ?? DEFAULT_CHECKLIST,
+    existing?.checklist
+      ? { ...DEFAULT_CHECKLIST, ...existing.checklist }
+      : DEFAULT_CHECKLIST,
   );
   const [note, setNote] = useState(existing?.note ?? "");
   const duration = useActiveDuration();
 
   useEffect(() => {
     if (existing) {
-      setChecklist(existing.checklist);
+      setChecklist({ ...DEFAULT_CHECKLIST, ...existing.checklist });
       setNote(existing.note ?? "");
     }
   }, [existing]);

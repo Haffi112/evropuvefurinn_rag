@@ -47,6 +47,7 @@ const CHECKLIST_LABELS: Record<string, string> = {
   no_hallucinations: "No hallucinations",
   appropriate_scope: "Appropriate scope",
   language_quality: "Language quality",
+  publishable_minor_edits: "Publishable with minor edits",
 };
 
 export default function ReviewerStatsPage() {

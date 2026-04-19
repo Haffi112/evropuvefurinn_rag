@@ -49,6 +49,7 @@ class EvaluationChecklist(BaseModel):
     no_hallucinations: bool = False
     appropriate_scope: bool = False
     language_quality: bool = False
+    publishable_minor_edits: bool = False
 
 
 class EvaluationCreate(BaseModel):
