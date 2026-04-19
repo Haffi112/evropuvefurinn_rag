@@ -4,6 +4,7 @@ import {
   BarChart3,
   ClipboardCheck,
   FileText,
+  Flag,
   History,
   Layers,
   LayoutDashboard,
@@ -24,6 +25,7 @@ const NAV_ITEMS = [
   { to: "/reviewers", label: "Reviewers", icon: Users },
   { to: "/reviews", label: "Reviews", icon: ClipboardCheck },
   { to: "/review-progress", label: "Review progress", icon: BarChart3 },
+  { to: "/flagged-references", label: "Flagged references", icon: Flag },
 ] as const;
 
 export default function AppLayout() {

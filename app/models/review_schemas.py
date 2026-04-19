@@ -58,6 +58,23 @@ class EvaluationCreate(BaseModel):
     duration_seconds: int | None = None
 
 
+class FlagReferenceRequest(BaseModel):
+    article_id: str
+    query_log_id: int | None = None
+    reason: str | None = None
+
+
+class FlagResponse(BaseModel):
+    id: int
+    article_id: str
+    reviewer_id: int
+    reviewer_username: str | None = None
+    query_log_id: int | None = None
+    reason: str | None = None
+    resolved_at: datetime | None = None
+    created_at: datetime
+
+
 class EvaluationResponse(BaseModel):
     id: int
     query_log_id: int

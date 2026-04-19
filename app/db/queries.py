@@ -478,6 +478,180 @@ async def delete_batch(batch_id: int) -> bool:
         return row is not None
 
 
+# ── Flagged references ──────────────────────────────────────
+
+async def flag_reference(
+    article_id: str, reviewer_id: int,
+    query_log_id: int | None, reason: str | None,
+) -> dict:
+    """Create (or re-open) an OPEN flag for (article, reviewer). If the reviewer
+    already has an open flag on this article, update its reason; otherwise
+    insert a new row. Returns the persisted row."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO flagged_references (article_id, reviewer_id, query_log_id, reason)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (article_id, reviewer_id) WHERE resolved_at IS NULL
+            DO UPDATE SET
+                query_log_id = COALESCE(EXCLUDED.query_log_id, flagged_references.query_log_id),
+                reason = COALESCE(EXCLUDED.reason, flagged_references.reason),
+                created_at = now()
+            RETURNING *
+            """,
+            article_id, reviewer_id, query_log_id, reason,
+        )
+        return dict(row)
+
+
+async def unflag_reference(flag_id: int, reviewer_id: int) -> bool:
+    """Delete a flag row. The reviewer can only remove their own flag."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "DELETE FROM flagged_references WHERE id = $1 AND reviewer_id = $2 RETURNING id",
+            flag_id, reviewer_id,
+        )
+        return row is not None
+
+
+async def get_flags_for_query(query_log_id: int) -> list[dict]:
+    """Return open flags that were raised on the references of this query_log
+    (or on the same articles regardless of context — we just return whatever
+    the caller needs to highlight flagged refs in the detail UI)."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        # Grab the article ids referenced by this query first
+        ql = await conn.fetchrow(
+            "SELECT \"references\" FROM query_log WHERE id = $1", query_log_id,
+        )
+        if not ql:
+            return []
+        refs = ql["references"]
+        if isinstance(refs, str):
+            refs = json.loads(refs)
+        article_ids = [r.get("id") for r in refs if r.get("id")]
+        if not article_ids:
+            return []
+        rows = await conn.fetch(
+            """
+            SELECT f.id, f.article_id, f.reviewer_id, f.reason, f.created_at,
+                   u.username AS reviewer_username
+            FROM flagged_references f
+            JOIN review_users u ON u.id = f.reviewer_id
+            WHERE f.resolved_at IS NULL AND f.article_id = ANY($1)
+            """,
+            article_ids,
+        )
+        return [dict(r) for r in rows]
+
+
+async def list_flagged_references(resolved: bool | None = False) -> list[dict]:
+    """Admin view: aggregate flags per article. Each row is an article plus
+    open/total counts, distinct reviewers, most-recent flag, all flag details."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if resolved is False:
+            having = "HAVING COUNT(*) FILTER (WHERE f.resolved_at IS NULL) > 0"
+        elif resolved is True:
+            having = "HAVING COUNT(*) FILTER (WHERE f.resolved_at IS NOT NULL) > 0"
+        else:
+            having = ""
+
+        rows = await conn.fetch(
+            f"""
+            SELECT a.id AS article_id,
+                   a.title,
+                   a.source_url,
+                   a.date AS article_date,
+                   COUNT(*) AS total_flags,
+                   COUNT(*) FILTER (WHERE f.resolved_at IS NULL) AS open_flags,
+                   COUNT(*) FILTER (WHERE f.resolved_at IS NOT NULL) AS resolved_flags,
+                   COUNT(DISTINCT f.reviewer_id) FILTER (WHERE f.resolved_at IS NULL) AS distinct_reviewers,
+                   MAX(f.created_at) AS most_recent,
+                   json_agg(
+                       json_build_object(
+                           'id', f.id,
+                           'reviewer_id', f.reviewer_id,
+                           'reviewer_username', u.username,
+                           'reason', f.reason,
+                           'query_log_id', f.query_log_id,
+                           'resolved_at', f.resolved_at,
+                           'resolved_by_username', ru.username,
+                           'created_at', f.created_at
+                       )
+                       ORDER BY f.created_at DESC
+                   ) AS flags
+            FROM articles a
+            JOIN flagged_references f ON f.article_id = a.id
+            JOIN review_users u ON u.id = f.reviewer_id
+            LEFT JOIN review_users ru ON ru.id = f.resolved_by
+            GROUP BY a.id, a.title, a.source_url, a.date
+            {having}
+            ORDER BY COUNT(*) FILTER (WHERE f.resolved_at IS NULL) DESC,
+                     COUNT(*) DESC,
+                     MAX(f.created_at) DESC
+            """
+        )
+        result = []
+        for r in rows:
+            d = dict(r)
+            flags = d.get("flags")
+            if isinstance(flags, str):
+                d["flags"] = json.loads(flags)
+            result.append(d)
+        return result
+
+
+async def resolve_flag(flag_id: int, admin_user_id: int | None = None) -> bool:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE flagged_references
+            SET resolved_at = now(), resolved_by = $2
+            WHERE id = $1 AND resolved_at IS NULL
+            RETURNING id
+            """,
+            flag_id, admin_user_id,
+        )
+        return row is not None
+
+
+async def resolve_all_flags_for_article(article_id: str, admin_user_id: int | None = None) -> int:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            WITH updated AS (
+                UPDATE flagged_references
+                SET resolved_at = now(), resolved_by = $2
+                WHERE article_id = $1 AND resolved_at IS NULL
+                RETURNING id
+            )
+            SELECT COUNT(*) AS n FROM updated
+            """,
+            article_id, admin_user_id,
+        )
+        return row["n"] if row else 0
+
+
+async def get_flag_stats() -> dict:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE resolved_at IS NULL) AS open_flags,
+                COUNT(*) FILTER (WHERE resolved_at IS NOT NULL) AS resolved_flags,
+                COUNT(DISTINCT article_id) FILTER (WHERE resolved_at IS NULL) AS articles_with_open_flags
+            FROM flagged_references
+            """
+        )
+        return dict(row) if row else {"open_flags": 0, "resolved_flags": 0, "articles_with_open_flags": 0}
+
+
 # ── Stats (reviewer + admin) ────────────────────────────────
 
 async def get_reviewer_stats(reviewer_id: int) -> dict:

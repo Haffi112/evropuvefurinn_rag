@@ -113,6 +113,25 @@ CREATE TABLE IF NOT EXISTS query_batches (
     completed_at TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS flagged_references (
+    id            BIGSERIAL PRIMARY KEY,
+    article_id    TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    reviewer_id   INT NOT NULL REFERENCES review_users(id),
+    query_log_id  BIGINT REFERENCES query_log(id) ON DELETE SET NULL,
+    reason        TEXT,
+    resolved_at   TIMESTAMPTZ,
+    resolved_by   INT REFERENCES review_users(id),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- One OPEN flag per reviewer per article (allows re-flagging after resolution)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_flagged_references_unique_open
+    ON flagged_references (article_id, reviewer_id)
+    WHERE resolved_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_flagged_references_article
+    ON flagged_references (article_id);
+CREATE INDEX IF NOT EXISTS idx_flagged_references_created
+    ON flagged_references (created_at DESC);
+
 CREATE TABLE IF NOT EXISTS batch_items (
     id             BIGSERIAL PRIMARY KEY,
     batch_id       BIGINT NOT NULL REFERENCES query_batches(id) ON DELETE CASCADE,

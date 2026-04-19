@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { CheckCircle2, Download, SkipForward } from "lucide-react";
+import { CheckCircle2, Download, ExternalLink, Flag, SkipForward, X } from "lucide-react";
 import { ApiError, reviewFetch, getToken } from "@review/lib/review-api";
+import { useReviewAuth } from "@review/hooks/use-review-auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -95,16 +96,33 @@ const DEFAULT_CHECKLIST: ChecklistState = {
 
 // ── Component ──────────────────────────────────────────────
 
+interface FlagDto {
+  id: number;
+  article_id: string;
+  reviewer_id: number;
+  reviewer_username: string;
+  reason: string | null;
+  created_at: string;
+}
+
 export default function ReviewDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { username: myUsername } = useReviewAuth();
   const [allDone, setAllDone] = useState(false);
 
   const { data, isLoading } = useQuery<QueryDetail>({
     queryKey: ["review-query", id],
     queryFn: () => reviewFetch(`/api/v1/review/queries/${id}`),
     enabled: !!id,
+  });
+
+  const { data: flags = [] } = useQuery<FlagDto[]>({
+    queryKey: ["review-query-flags", id],
+    queryFn: () => reviewFetch(`/api/v1/review/queries/${id}/flags`),
+    enabled: !!id,
+    staleTime: 5_000,
   });
 
   useEffect(() => {
@@ -114,6 +132,9 @@ export default function ReviewDetailPage() {
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ["review-query", id] });
+
+  const invalidateFlags = () =>
+    queryClient.invalidateQueries({ queryKey: ["review-query-flags", id] });
 
   const goToNext = async () => {
     if (!id) return;
@@ -226,33 +247,25 @@ export default function ReviewDetailPage() {
                 References ({data.references.length})
               </h2>
               <ul className="space-y-2">
-                {data.references.map((ref, i) => (
-                  <li
-                    key={ref.id ?? i}
-                    className="flex items-start justify-between gap-2 rounded-sm border border-l-4 border-l-primary/40 p-2 text-sm"
-                  >
-                    <div>
-                      <p className="font-medium">
-                        {ref.title ?? "Untitled"}
-                      </p>
-                      {ref.source_url && (
-                        <a
-                          href={ref.source_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-xs text-blue-600 hover:underline"
-                        >
-                          {ref.source_url}
-                        </a>
-                      )}
-                    </div>
-                    {ref.relevance_score != null && (
-                      <Badge variant="outline" className="shrink-0 text-xs">
-                        {(ref.relevance_score * 100).toFixed(0)}%
-                      </Badge>
-                    )}
-                  </li>
-                ))}
+                {data.references.map((ref, i) => {
+                  const articleFlags = ref.id
+                    ? flags.filter((f) => f.article_id === ref.id)
+                    : [];
+                  const myFlag = myUsername
+                    ? articleFlags.find((f) => f.reviewer_username === myUsername) ?? null
+                    : null;
+                  const othersCount = articleFlags.length - (myFlag ? 1 : 0);
+                  return (
+                    <ReferenceCard
+                      key={ref.id ?? i}
+                      ref_={ref}
+                      queryLogId={data.id}
+                      myFlag={myFlag}
+                      othersFlagCount={othersCount}
+                      onFlagChanged={invalidateFlags}
+                    />
+                  );
+                })}
               </ul>
             </section>
           )}
@@ -540,5 +553,189 @@ function ArticleEditor({
         )}
       </div>
     </section>
+  );
+}
+
+// ── ReferenceCard (with outdated-flag affordance) ─────────
+
+function ReferenceCard({
+  ref_,
+  queryLogId,
+  myFlag,
+  othersFlagCount,
+  onFlagChanged,
+}: {
+  ref_: Reference;
+  queryLogId: number;
+  myFlag: FlagDto | null;
+  othersFlagCount: number;
+  onFlagChanged: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const doFlag = async () => {
+    if (!ref_.id) return;
+    setBusy(true);
+    try {
+      await reviewFetch("/api/v1/review/flags", {
+        method: "POST",
+        body: JSON.stringify({
+          article_id: ref_.id,
+          query_log_id: queryLogId,
+          reason: reason.trim() || null,
+        }),
+      });
+      setReason("");
+      setExpanded(false);
+      onFlagChanged();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doUnflag = async () => {
+    if (!myFlag) return;
+    setBusy(true);
+    try {
+      await reviewFetch(`/api/v1/review/flags/${myFlag.id}`, { method: "DELETE" });
+      onFlagChanged();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const borderClass = myFlag
+    ? "border-l-amber-500"
+    : othersFlagCount > 0
+      ? "border-l-amber-400/60"
+      : "border-l-primary/40";
+
+  return (
+    <li
+      className={`rounded-sm border border-l-4 ${borderClass} overflow-hidden text-sm`}
+    >
+      <div className="flex items-start justify-between gap-2 p-2">
+        <div className="min-w-0 flex-1">
+          <p className="font-medium">{ref_.title ?? "Untitled"}</p>
+          {ref_.source_url && (
+            <a
+              href={ref_.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+            >
+              {ref_.source_url}
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          {othersFlagCount > 0 && !myFlag && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"
+              title={`${othersFlagCount} other reviewer${othersFlagCount === 1 ? "" : "s"} flagged this as outdated`}
+            >
+              <Flag className="h-3 w-3" />
+              {othersFlagCount}
+            </span>
+          )}
+          {ref_.relevance_score != null && (
+            <Badge variant="outline" className="shrink-0 text-xs">
+              {(ref_.relevance_score * 100).toFixed(0)}%
+            </Badge>
+          )}
+          {!myFlag && !expanded && ref_.id && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setExpanded(true)}
+              className="h-7 w-7 p-0 text-muted-foreground hover:bg-amber-500/10 hover:text-amber-600 dark:hover:text-amber-400"
+              title="Flag as outdated"
+            >
+              <Flag className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Existing flag by me — show the reason inline + unflag */}
+      {myFlag && (
+        <div className="flex items-start gap-2 border-t border-amber-500/20 bg-amber-500/5 px-3 py-2">
+          <Flag className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div className="flex-1 text-xs">
+            <p className="font-medium text-amber-700 dark:text-amber-300">
+              You flagged this as outdated
+              {othersFlagCount > 0 && (
+                <span className="ml-1 font-normal text-amber-700/70 dark:text-amber-300/70">
+                  · {othersFlagCount} other reviewer{othersFlagCount === 1 ? "" : "s"} agree
+                </span>
+              )}
+            </p>
+            {myFlag.reason && (
+              <p className="mt-0.5 text-amber-800/80 dark:text-amber-200/80">
+                "{myFlag.reason}"
+              </p>
+            )}
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={doUnflag}
+            disabled={busy}
+            className="h-6 shrink-0 px-2 text-[11px] text-amber-700 hover:bg-amber-500/15 dark:text-amber-300"
+          >
+            Unflag
+          </Button>
+        </div>
+      )}
+
+      {/* Expanded flag-entry form */}
+      {expanded && !myFlag && (
+        <div className="space-y-2 border-t border-amber-500/20 bg-amber-500/5 px-3 py-3">
+          <div className="flex items-start gap-2">
+            <Flag className="mt-1 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div className="flex-1 space-y-2">
+              <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
+                Flag as outdated
+              </p>
+              <Textarea
+                placeholder="Why is this outdated? (optional — e.g., superseded by newer regulation, broken URL, ...)"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                rows={2}
+                className="border-amber-500/30 bg-background text-xs focus-visible:ring-amber-500/30"
+                autoFocus
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={doFlag}
+                  disabled={busy}
+                  className="h-7 bg-amber-600 text-xs text-white hover:bg-amber-700"
+                >
+                  <Flag className="mr-1.5 h-3 w-3" />
+                  Flag
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setExpanded(false);
+                    setReason("");
+                  }}
+                  className="h-7 text-xs text-muted-foreground"
+                >
+                  <X className="mr-1.5 h-3 w-3" />
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </li>
   );
 }

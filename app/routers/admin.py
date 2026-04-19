@@ -394,6 +394,47 @@ async def admin_review_stats():
     return await db.get_admin_review_stats()
 
 
+# ── Flagged references (admin view) ─────────────────────────
+
+@router.get(
+    "/flagged-references",
+    summary="List articles flagged as outdated",
+    description="Grouped by article, ordered by open-flag count descending. "
+    "Filter with ?resolved=true|false|all (default: false = open flags only).",
+)
+async def list_flagged_references(resolved: str = "false"):
+    resolved_val: bool | None
+    if resolved == "true":
+        resolved_val = True
+    elif resolved == "all":
+        resolved_val = None
+    else:
+        resolved_val = False
+    items = await db.list_flagged_references(resolved=resolved_val)
+    stats = await db.get_flag_stats()
+    return {"items": items, "stats": stats}
+
+
+@router.post(
+    "/flagged-references/{flag_id}/resolve",
+    summary="Mark a flag as resolved",
+)
+async def resolve_flag(flag_id: int):
+    ok = await db.resolve_flag(flag_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Flag not found or already resolved")
+    return {"resolved": True}
+
+
+@router.post(
+    "/flagged-references/articles/{article_id}/resolve-all",
+    summary="Resolve all open flags on an article",
+)
+async def resolve_all_for_article(article_id: str):
+    n = await db.resolve_all_flags_for_article(article_id)
+    return {"resolved": n}
+
+
 # ── Admin playground (parity with reviewer playground) ──────
 
 def _get_rag(request: Request) -> RAGService:

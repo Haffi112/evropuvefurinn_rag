@@ -17,6 +17,7 @@ import BatchesListPage from "@/pages/BatchesListPage";
 import BatchUploadPage from "@/pages/BatchUploadPage";
 import BatchDetailPage from "@/pages/BatchDetailPage";
 import ReviewProgressPage from "@/pages/ReviewProgressPage";
+import FlaggedReferencesPage from "@/pages/FlaggedReferencesPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -50,6 +51,7 @@ export default function App() {
                 <Route path="/reviewers" element={<ReviewersPage />} />
                 <Route path="/reviews" element={<ReviewsPage />} />
                 <Route path="/review-progress" element={<ReviewProgressPage />} />
+                <Route path="/flagged-references" element={<FlaggedReferencesPage />} />
               </Route>
             </Route>
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

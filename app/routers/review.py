@@ -18,6 +18,8 @@ from app.middleware.review_auth import (
 from app.models.review_schemas import (
     EvaluationCreate,
     EvaluationResponse,
+    FlagReferenceRequest,
+    FlagResponse,
     ReviewedArticleCreate,
     ReviewedArticleResponse,
     ReviewLoginRequest,
@@ -102,6 +104,50 @@ async def get_reviewer_stats(
     reviewer: ReviewUser = Depends(verify_review_token),
 ):
     return await db.get_reviewer_stats(reviewer.id)
+
+
+# ── Reference flagging ─────────────────────────────────────
+
+@router.post(
+    "/flags",
+    summary="Flag a reference as outdated",
+)
+async def flag_reference(
+    body: FlagReferenceRequest,
+    reviewer: ReviewUser = Depends(verify_review_token),
+):
+    row = await db.flag_reference(
+        article_id=body.article_id,
+        reviewer_id=reviewer.id,
+        query_log_id=body.query_log_id,
+        reason=body.reason,
+    )
+    return row
+
+
+@router.delete(
+    "/flags/{flag_id}",
+    summary="Remove your own flag on a reference",
+)
+async def unflag_reference(
+    flag_id: int,
+    reviewer: ReviewUser = Depends(verify_review_token),
+):
+    ok = await db.unflag_reference(flag_id, reviewer.id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Flag not found or not yours")
+    return {"deleted": True}
+
+
+@router.get(
+    "/queries/{query_id}/flags",
+    summary="List open flags on this query's referenced articles",
+)
+async def get_query_flags(
+    query_id: int,
+    reviewer: ReviewUser = Depends(verify_review_token),
+):
+    return await db.get_flags_for_query(query_id)
 
 
 @router.get(
