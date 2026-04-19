@@ -59,14 +59,18 @@ class EvaluationCreate(BaseModel):
 
 
 class FlagReferenceRequest(BaseModel):
-    article_id: str
+    article_id: str | None = None
+    url: str | None = None
+    flag_type: str = "outdated"  # 'outdated' | 'irrelevant' | 'untrustworthy'
     query_log_id: int | None = None
     reason: str | None = None
 
 
 class FlagResponse(BaseModel):
     id: int
-    article_id: str
+    article_id: str | None = None
+    url: str | None = None
+    flag_type: str
     reviewer_id: int
     reviewer_username: str | None = None
     query_log_id: int | None = None

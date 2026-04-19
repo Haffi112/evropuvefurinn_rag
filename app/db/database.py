@@ -115,20 +115,36 @@ CREATE TABLE IF NOT EXISTS query_batches (
 
 CREATE TABLE IF NOT EXISTS flagged_references (
     id            BIGSERIAL PRIMARY KEY,
-    article_id    TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    -- Exactly one of article_id or url is set:
+    --   article_id: RAG reference (foreign key to articles)
+    --   url:        web-search reference (arbitrary URL)
+    article_id    TEXT REFERENCES articles(id) ON DELETE CASCADE,
+    url           TEXT,
+    -- 'outdated' (RAG), 'irrelevant' (web), 'untrustworthy' (web)
+    flag_type     TEXT NOT NULL DEFAULT 'outdated',
     reviewer_id   INT NOT NULL REFERENCES review_users(id),
     query_log_id  BIGINT REFERENCES query_log(id) ON DELETE SET NULL,
     reason        TEXT,
     resolved_at   TIMESTAMPTZ,
     resolved_by   INT REFERENCES review_users(id),
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT flagged_references_identifier_xor
+        CHECK ((article_id IS NOT NULL) <> (url IS NOT NULL)),
+    CONSTRAINT flagged_references_flag_type_check
+        CHECK (flag_type IN ('outdated', 'irrelevant', 'untrustworthy'))
 );
--- One OPEN flag per reviewer per article (allows re-flagging after resolution)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_flagged_references_unique_open
+-- One OPEN flag per reviewer per identifier (article_id OR url).
+-- Two partial indexes so each identifier type is enforced independently.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_flagged_references_unique_article_open
     ON flagged_references (article_id, reviewer_id)
-    WHERE resolved_at IS NULL;
+    WHERE article_id IS NOT NULL AND resolved_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_flagged_references_unique_url_open
+    ON flagged_references (url, reviewer_id)
+    WHERE url IS NOT NULL AND resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_flagged_references_article
-    ON flagged_references (article_id);
+    ON flagged_references (article_id) WHERE article_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_flagged_references_url
+    ON flagged_references (url) WHERE url IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_flagged_references_created
     ON flagged_references (created_at DESC);
 
@@ -181,6 +197,41 @@ ALTER TABLE review_evaluations ADD COLUMN IF NOT EXISTS duration_seconds INT;
 UPDATE review_evaluations
 SET checklist = checklist || '{"publishable_minor_edits": false}'::jsonb
 WHERE NOT (checklist ? 'publishable_minor_edits');
+
+-- Web-reference flagging: extend flagged_references to also flag URLs
+-- (not just article IDs) and to carry a flag_type (outdated/irrelevant/untrustworthy).
+ALTER TABLE flagged_references ALTER COLUMN article_id DROP NOT NULL;
+ALTER TABLE flagged_references ADD COLUMN IF NOT EXISTS url TEXT;
+ALTER TABLE flagged_references ADD COLUMN IF NOT EXISTS flag_type TEXT NOT NULL DEFAULT 'outdated';
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'flagged_references_identifier_xor'
+    ) THEN
+        ALTER TABLE flagged_references ADD CONSTRAINT flagged_references_identifier_xor
+            CHECK ((article_id IS NOT NULL) <> (url IS NOT NULL));
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'flagged_references_flag_type_check'
+    ) THEN
+        ALTER TABLE flagged_references ADD CONSTRAINT flagged_references_flag_type_check
+            CHECK (flag_type IN ('outdated', 'irrelevant', 'untrustworthy'));
+    END IF;
+END $$;
+
+-- Replace the old single unique index with two type-specific ones
+DROP INDEX IF EXISTS idx_flagged_references_unique_open;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_flagged_references_unique_article_open
+    ON flagged_references (article_id, reviewer_id)
+    WHERE article_id IS NOT NULL AND resolved_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_flagged_references_unique_url_open
+    ON flagged_references (url, reviewer_id)
+    WHERE url IS NOT NULL AND resolved_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_flagged_references_url
+    ON flagged_references (url) WHERE url IS NOT NULL;
 """
 
 

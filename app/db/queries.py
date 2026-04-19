@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 import asyncpg
@@ -480,28 +481,95 @@ async def delete_batch(batch_id: int) -> bool:
 
 # ── Flagged references ──────────────────────────────────────
 
+_REFS_HEADING_RE = re.compile(
+    r"^##\s+(?:Heimildir|References)\s*$", re.MULTILINE
+)
+_URL_RE = re.compile(r"https?://[^\s)\]\>]+")
+
+
+def _extract_web_urls(answer_text: str | None) -> list[str]:
+    """Extract URLs from the References/Heimildir section of a web-search
+    answer. Returns unique URLs in first-appearance order (after the heading)."""
+    if not answer_text:
+        return []
+    m = _REFS_HEADING_RE.search(answer_text)
+    if not m:
+        return []
+    section = answer_text[m.end():]
+    urls: list[str] = []
+    seen: set[str] = set()
+    for line in section.splitlines():
+        if not re.match(r"^\s*-\s*\[\d+\]", line):
+            continue
+        for url_m in _URL_RE.finditer(line):
+            url = url_m.group(0).rstrip(".,;)'\"")
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+    return urls
+
+
+def _domain_of(url: str) -> str | None:
+    from urllib.parse import urlparse
+    try:
+        host = urlparse(url).netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        return host or None
+    except Exception:
+        return None
+
+
 async def flag_reference(
-    article_id: str, reviewer_id: int,
-    query_log_id: int | None, reason: str | None,
+    reviewer_id: int,
+    article_id: str | None = None,
+    url: str | None = None,
+    flag_type: str = "outdated",
+    query_log_id: int | None = None,
+    reason: str | None = None,
 ) -> dict:
-    """Create (or re-open) an OPEN flag for (article, reviewer). If the reviewer
-    already has an open flag on this article, update its reason; otherwise
-    insert a new row. Returns the persisted row."""
+    """Create (or re-open) an OPEN flag. Exactly one of article_id/url must be set.
+    Upserts so the same reviewer flagging the same identifier twice updates
+    the existing open flag instead of raising a conflict."""
+    if (article_id is None) == (url is None):
+        raise ValueError("exactly one of article_id or url must be set")
+
     pool = get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO flagged_references (article_id, reviewer_id, query_log_id, reason)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (article_id, reviewer_id) WHERE resolved_at IS NULL
-            DO UPDATE SET
-                query_log_id = COALESCE(EXCLUDED.query_log_id, flagged_references.query_log_id),
-                reason = COALESCE(EXCLUDED.reason, flagged_references.reason),
-                created_at = now()
-            RETURNING *
-            """,
-            article_id, reviewer_id, query_log_id, reason,
-        )
+        if article_id is not None:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO flagged_references
+                    (article_id, reviewer_id, flag_type, query_log_id, reason)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (article_id, reviewer_id)
+                    WHERE article_id IS NOT NULL AND resolved_at IS NULL
+                DO UPDATE SET
+                    flag_type = EXCLUDED.flag_type,
+                    query_log_id = COALESCE(EXCLUDED.query_log_id, flagged_references.query_log_id),
+                    reason = COALESCE(EXCLUDED.reason, flagged_references.reason),
+                    created_at = now()
+                RETURNING *
+                """,
+                article_id, reviewer_id, flag_type, query_log_id, reason,
+            )
+        else:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO flagged_references
+                    (url, reviewer_id, flag_type, query_log_id, reason)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (url, reviewer_id)
+                    WHERE url IS NOT NULL AND resolved_at IS NULL
+                DO UPDATE SET
+                    flag_type = EXCLUDED.flag_type,
+                    query_log_id = COALESCE(EXCLUDED.query_log_id, flagged_references.query_log_id),
+                    reason = COALESCE(EXCLUDED.reason, flagged_references.reason),
+                    created_at = now()
+                RETURNING *
+                """,
+                url, reviewer_id, flag_type, query_log_id, reason,
+            )
         return dict(row)
 
 
@@ -517,39 +585,63 @@ async def unflag_reference(flag_id: int, reviewer_id: int) -> bool:
 
 
 async def get_flags_for_query(query_log_id: int) -> list[dict]:
-    """Return open flags that were raised on the references of this query_log
-    (or on the same articles regardless of context — we just return whatever
-    the caller needs to highlight flagged refs in the detail UI)."""
+    """Return open flags associated with a query's references. Matches by:
+    - `article_id` — from the query_log.references JSONB (RAG citations)
+    - `url` — parsed from the query_log.response_text References section
+      (web-search citations)
+
+    Works transparently for both modes: RAG queries return article-based
+    flags, web-search queries return URL-based flags, and mixed histories
+    can return both if present.
+    """
     pool = get_pool()
     async with pool.acquire() as conn:
-        # Grab the article ids referenced by this query first
         ql = await conn.fetchrow(
-            "SELECT \"references\" FROM query_log WHERE id = $1", query_log_id,
+            'SELECT "references", response_text, mode FROM query_log WHERE id = $1',
+            query_log_id,
         )
         if not ql:
             return []
+
         refs = ql["references"]
         if isinstance(refs, str):
             refs = json.loads(refs)
-        article_ids = [r.get("id") for r in refs if r.get("id")]
-        if not article_ids:
+        article_ids = [r.get("id") for r in (refs or []) if r.get("id")]
+
+        urls = _extract_web_urls(ql["response_text"])
+
+        if not article_ids and not urls:
             return []
+
         rows = await conn.fetch(
             """
-            SELECT f.id, f.article_id, f.reviewer_id, f.reason, f.created_at,
+            SELECT f.id, f.article_id, f.url, f.flag_type, f.reviewer_id,
+                   f.reason, f.created_at,
                    u.username AS reviewer_username
             FROM flagged_references f
             JOIN review_users u ON u.id = f.reviewer_id
-            WHERE f.resolved_at IS NULL AND f.article_id = ANY($1)
+            WHERE f.resolved_at IS NULL
+              AND (
+                  (f.article_id IS NOT NULL AND f.article_id = ANY($1::text[]))
+                  OR
+                  (f.url IS NOT NULL AND f.url = ANY($2::text[]))
+              )
             """,
-            article_ids,
+            article_ids, urls,
         )
         return [dict(r) for r in rows]
 
 
 async def list_flagged_references(resolved: bool | None = False) -> list[dict]:
-    """Admin view: aggregate flags per article. Each row is an article plus
-    open/total counts, distinct reviewers, most-recent flag, all flag details."""
+    """Admin view: aggregate flags grouped by target. Each row represents
+    either an article (RAG) or a URL (web) plus open/total counts, distinct
+    reviewers, most-recent flag, flag_type breakdown, and all flag details.
+
+    `resolved`:
+      - False (default): only groups with open flags
+      - True: only groups with resolved flags
+      - None: all
+    """
     pool = get_pool()
     async with pool.acquire() as conn:
         if resolved is False:
@@ -561,33 +653,44 @@ async def list_flagged_references(resolved: bool | None = False) -> list[dict]:
 
         rows = await conn.fetch(
             f"""
-            SELECT a.id AS article_id,
-                   a.title,
-                   a.source_url,
-                   a.date AS article_date,
-                   COUNT(*) AS total_flags,
-                   COUNT(*) FILTER (WHERE f.resolved_at IS NULL) AS open_flags,
-                   COUNT(*) FILTER (WHERE f.resolved_at IS NOT NULL) AS resolved_flags,
-                   COUNT(DISTINCT f.reviewer_id) FILTER (WHERE f.resolved_at IS NULL) AS distinct_reviewers,
-                   MAX(f.created_at) AS most_recent,
-                   json_agg(
-                       json_build_object(
-                           'id', f.id,
-                           'reviewer_id', f.reviewer_id,
-                           'reviewer_username', u.username,
-                           'reason', f.reason,
-                           'query_log_id', f.query_log_id,
-                           'resolved_at', f.resolved_at,
-                           'resolved_by_username', ru.username,
-                           'created_at', f.created_at
-                       )
-                       ORDER BY f.created_at DESC
-                   ) AS flags
-            FROM articles a
-            JOIN flagged_references f ON f.article_id = a.id
+            SELECT
+                CASE WHEN f.article_id IS NOT NULL
+                     THEN 'article' ELSE 'url' END           AS kind,
+                f.article_id                                  AS article_id,
+                f.url                                         AS url,
+                a.title                                       AS article_title,
+                a.source_url                                  AS article_source_url,
+                a.date                                        AS article_date,
+                COUNT(*)                                      AS total_flags,
+                COUNT(*) FILTER (WHERE f.resolved_at IS NULL) AS open_flags,
+                COUNT(*) FILTER (WHERE f.resolved_at IS NOT NULL) AS resolved_flags,
+                COUNT(DISTINCT f.reviewer_id) FILTER (WHERE f.resolved_at IS NULL) AS distinct_reviewers,
+                MAX(f.created_at)                             AS most_recent,
+                -- flag type breakdown (open flags only)
+                COUNT(*) FILTER (WHERE f.resolved_at IS NULL AND f.flag_type = 'outdated')      AS open_outdated,
+                COUNT(*) FILTER (WHERE f.resolved_at IS NULL AND f.flag_type = 'irrelevant')    AS open_irrelevant,
+                COUNT(*) FILTER (WHERE f.resolved_at IS NULL AND f.flag_type = 'untrustworthy') AS open_untrustworthy,
+                json_agg(
+                    json_build_object(
+                        'id', f.id,
+                        'flag_type', f.flag_type,
+                        'reviewer_id', f.reviewer_id,
+                        'reviewer_username', u.username,
+                        'reason', f.reason,
+                        'query_log_id', f.query_log_id,
+                        'resolved_at', f.resolved_at,
+                        'resolved_by_username', ru.username,
+                        'created_at', f.created_at
+                    )
+                    ORDER BY f.created_at DESC
+                ) AS flags
+            FROM flagged_references f
             JOIN review_users u ON u.id = f.reviewer_id
             LEFT JOIN review_users ru ON ru.id = f.resolved_by
-            GROUP BY a.id, a.title, a.source_url, a.date
+            LEFT JOIN articles a ON a.id = f.article_id
+            GROUP BY
+                CASE WHEN f.article_id IS NOT NULL THEN 'article' ELSE 'url' END,
+                f.article_id, f.url, a.title, a.source_url, a.date
             {having}
             ORDER BY COUNT(*) FILTER (WHERE f.resolved_at IS NULL) DESC,
                      COUNT(*) DESC,
@@ -602,6 +705,57 @@ async def list_flagged_references(resolved: bool | None = False) -> list[dict]:
                 d["flags"] = json.loads(flags)
             result.append(d)
         return result
+
+
+async def list_flagged_domains(resolved: bool | None = False) -> list[dict]:
+    """Admin aggregate: group URL-based flags by domain. Articles are
+    excluded (they have their own canonical group in the main list; the
+    domain view is specifically about web sources)."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT f.url, f.resolved_at, f.flag_type
+            FROM flagged_references f
+            WHERE f.url IS NOT NULL
+            """
+        )
+
+    by_domain: dict[str, dict] = {}
+    for r in rows:
+        dom = _domain_of(r["url"])
+        if not dom:
+            continue
+        d = by_domain.setdefault(dom, {
+            "domain": dom,
+            "total_flags": 0, "open_flags": 0, "resolved_flags": 0,
+            "open_irrelevant": 0, "open_untrustworthy": 0, "open_outdated": 0,
+            "urls": set(),
+        })
+        d["total_flags"] += 1
+        d["urls"].add(r["url"])
+        if r["resolved_at"] is None:
+            d["open_flags"] += 1
+            if r["flag_type"] == "irrelevant":
+                d["open_irrelevant"] += 1
+            elif r["flag_type"] == "untrustworthy":
+                d["open_untrustworthy"] += 1
+            elif r["flag_type"] == "outdated":
+                d["open_outdated"] += 1
+        else:
+            d["resolved_flags"] += 1
+
+    result: list[dict] = []
+    for d in by_domain.values():
+        if resolved is False and d["open_flags"] == 0:
+            continue
+        if resolved is True and d["resolved_flags"] == 0:
+            continue
+        d["distinct_urls"] = len(d["urls"])
+        d.pop("urls")
+        result.append(d)
+    result.sort(key=lambda x: (-x["open_flags"], -x["total_flags"], x["domain"]))
+    return result
 
 
 async def resolve_flag(flag_id: int, admin_user_id: int | None = None) -> bool:
@@ -637,6 +791,24 @@ async def resolve_all_flags_for_article(article_id: str, admin_user_id: int | No
         return row["n"] if row else 0
 
 
+async def resolve_all_flags_for_url(url: str, admin_user_id: int | None = None) -> int:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            WITH updated AS (
+                UPDATE flagged_references
+                SET resolved_at = now(), resolved_by = $2
+                WHERE url = $1 AND resolved_at IS NULL
+                RETURNING id
+            )
+            SELECT COUNT(*) AS n FROM updated
+            """,
+            url, admin_user_id,
+        )
+        return row["n"] if row else 0
+
+
 async def get_flag_stats() -> dict:
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -645,11 +817,19 @@ async def get_flag_stats() -> dict:
             SELECT
                 COUNT(*) FILTER (WHERE resolved_at IS NULL) AS open_flags,
                 COUNT(*) FILTER (WHERE resolved_at IS NOT NULL) AS resolved_flags,
-                COUNT(DISTINCT article_id) FILTER (WHERE resolved_at IS NULL) AS articles_with_open_flags
+                COUNT(DISTINCT article_id) FILTER (WHERE resolved_at IS NULL AND article_id IS NOT NULL) AS articles_with_open_flags,
+                COUNT(DISTINCT url) FILTER (WHERE resolved_at IS NULL AND url IS NOT NULL) AS urls_with_open_flags,
+                COUNT(*) FILTER (WHERE resolved_at IS NULL AND flag_type = 'outdated') AS open_outdated,
+                COUNT(*) FILTER (WHERE resolved_at IS NULL AND flag_type = 'irrelevant') AS open_irrelevant,
+                COUNT(*) FILTER (WHERE resolved_at IS NULL AND flag_type = 'untrustworthy') AS open_untrustworthy
             FROM flagged_references
             """
         )
-        return dict(row) if row else {"open_flags": 0, "resolved_flags": 0, "articles_with_open_flags": 0}
+        return dict(row) if row else {
+            "open_flags": 0, "resolved_flags": 0,
+            "articles_with_open_flags": 0, "urls_with_open_flags": 0,
+            "open_outdated": 0, "open_irrelevant": 0, "open_untrustworthy": 0,
+        }
 
 
 # ── Stats (reviewer + admin) ────────────────────────────────

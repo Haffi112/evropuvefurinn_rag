@@ -108,17 +108,34 @@ async def get_reviewer_stats(
 
 # ── Reference flagging ─────────────────────────────────────
 
+_ALLOWED_FLAG_TYPES = {"outdated", "irrelevant", "untrustworthy"}
+
+
 @router.post(
     "/flags",
-    summary="Flag a reference as outdated",
+    summary="Flag a reference",
+    description="Flag either a RAG article (by article_id) or a web-search source "
+    "(by url). flag_type: 'outdated' | 'irrelevant' | 'untrustworthy'.",
 )
 async def flag_reference(
     body: FlagReferenceRequest,
     reviewer: ReviewUser = Depends(verify_review_token),
 ):
+    if (body.article_id is None) == (body.url is None):
+        raise HTTPException(
+            status_code=400,
+            detail="Exactly one of article_id or url must be provided",
+        )
+    if body.flag_type not in _ALLOWED_FLAG_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"flag_type must be one of {sorted(_ALLOWED_FLAG_TYPES)}",
+        )
     row = await db.flag_reference(
-        article_id=body.article_id,
         reviewer_id=reviewer.id,
+        article_id=body.article_id,
+        url=body.url,
+        flag_type=body.flag_type,
         query_log_id=body.query_log_id,
         reason=body.reason,
     )

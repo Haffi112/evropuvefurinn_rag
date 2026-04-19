@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from app.db import queries as db
@@ -398,9 +399,10 @@ async def admin_review_stats():
 
 @router.get(
     "/flagged-references",
-    summary="List articles flagged as outdated",
-    description="Grouped by article, ordered by open-flag count descending. "
-    "Filter with ?resolved=true|false|all (default: false = open flags only).",
+    summary="List flagged references (articles + web URLs)",
+    description="Grouped by article or URL, ordered by open-flag count descending. "
+    "Filter with ?resolved=true|false|all (default: false = open flags only). "
+    "Also returns a separate domain aggregate for URL-based flags.",
 )
 async def list_flagged_references(resolved: str = "false"):
     resolved_val: bool | None
@@ -411,8 +413,9 @@ async def list_flagged_references(resolved: str = "false"):
     else:
         resolved_val = False
     items = await db.list_flagged_references(resolved=resolved_val)
+    domains = await db.list_flagged_domains(resolved=resolved_val)
     stats = await db.get_flag_stats()
-    return {"items": items, "stats": stats}
+    return {"items": items, "domains": domains, "stats": stats}
 
 
 @router.post(
@@ -432,6 +435,19 @@ async def resolve_flag(flag_id: int):
 )
 async def resolve_all_for_article(article_id: str):
     n = await db.resolve_all_flags_for_article(article_id)
+    return {"resolved": n}
+
+
+class _ResolveUrlBody(BaseModel):
+    url: str
+
+
+@router.post(
+    "/flagged-references/urls/resolve-all",
+    summary="Resolve all open flags on a URL",
+)
+async def resolve_all_for_url(body: _ResolveUrlBody):
+    n = await db.resolve_all_flags_for_url(body.url)
     return {"resolved": n}
 
 
