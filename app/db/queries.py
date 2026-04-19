@@ -1514,3 +1514,69 @@ async def cancel_batch(batch_id: int) -> int:
             batch_id,
         )
         return row["n"] if row else 0
+
+
+async def regenerate_batch_items_by_mode(batch_id: int, mode: str) -> dict:
+    """Re-queue every item of a given mode in a batch and excise the existing
+    answers from the reviewer queue.
+
+    Skips items currently in 'processing' (worker-owned). Existing `query_log`
+    rows are marked `review_status = 'excluded'` rather than deleted, so any
+    reviewer evaluations / article drafts already attached remain intact but
+    the old answers disappear from the active queue.
+
+    Returns `{items_reset, logs_excluded, items_processing_skipped}`.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                WITH target AS (
+                    SELECT id, query_log_id, status
+                    FROM batch_items
+                    WHERE batch_id = $1 AND mode = $2
+                    FOR UPDATE
+                ),
+                to_reset AS (
+                    SELECT id, query_log_id FROM target WHERE status <> 'processing'
+                ),
+                to_skip AS (
+                    SELECT id FROM target WHERE status = 'processing'
+                ),
+                excluded_logs AS (
+                    UPDATE query_log
+                    SET review_status = 'excluded'
+                    WHERE id IN (
+                        SELECT query_log_id FROM to_reset WHERE query_log_id IS NOT NULL
+                    )
+                    RETURNING id
+                ),
+                reset_items AS (
+                    UPDATE batch_items
+                    SET status = 'pending',
+                        retry_count = 0,
+                        error = NULL,
+                        query_log_id = NULL,
+                        updated_at = now()
+                    WHERE id IN (SELECT id FROM to_reset)
+                    RETURNING id
+                )
+                SELECT
+                    (SELECT COUNT(*) FROM reset_items)      AS items_reset,
+                    (SELECT COUNT(*) FROM excluded_logs)    AS logs_excluded,
+                    (SELECT COUNT(*) FROM to_skip)          AS items_processing_skipped
+                """,
+                batch_id, mode,
+            )
+            await conn.execute(
+                """
+                UPDATE query_batches
+                SET status = 'running', completed_at = NULL
+                WHERE id = $1 AND status = 'completed'
+                """,
+                batch_id,
+            )
+    return dict(row) if row else {
+        "items_reset": 0, "logs_excluded": 0, "items_processing_skipped": 0,
+    }

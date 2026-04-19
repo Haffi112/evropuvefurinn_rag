@@ -6,7 +6,7 @@ Admin-only (Bearer API key). See spec
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 
 from app.db import queries as db
 from app.middleware.auth import verify_api_key
@@ -119,6 +119,31 @@ async def retry_single(batch_id: int, item_id: int):
     if not ok:
         raise HTTPException(status_code=404, detail="Item not found or not in failed state")
     return {"retried": 1}
+
+
+@router.post(
+    "/{batch_id}/regenerate",
+    summary="Re-queue every item of one mode and exclude existing answers",
+)
+async def regenerate_by_mode(
+    batch_id: int,
+    mode: str = Query(..., pattern="^(rag|websearch)$"),
+):
+    """Re-queue every `mode` item in this batch. Existing `query_log` rows
+    become `review_status = 'excluded'` so old answers drop out of the review
+    queue; evaluations and article drafts attached to them remain intact.
+    Skips items currently owned by the worker ('processing'). Reopens the
+    batch if it had been marked completed."""
+    batch = await db.get_batch_detail(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    result = await db.regenerate_batch_items_by_mode(batch_id, mode)
+    logger.info(
+        "Regenerate batch_id=%d mode=%s: items_reset=%d logs_excluded=%d processing_skipped=%d",
+        batch_id, mode, result["items_reset"], result["logs_excluded"],
+        result["items_processing_skipped"],
+    )
+    return result
 
 
 @router.post("/{batch_id}/cancel", summary="Cancel remaining pending items")
