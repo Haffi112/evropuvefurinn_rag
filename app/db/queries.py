@@ -441,7 +441,13 @@ async def get_next_unreviewed_query(
     """Pick a random query_log row that has no review_evaluations row and is
     not review_status='excluded'. Prefers rows attributed to the batch user
     (ql.reviewer_id = batch_user_id) when such candidates exist; falls back to
-    any unreviewed row otherwise. Returns the id, or None if nothing available."""
+    any unreviewed row otherwise. Returns the id, or None if nothing available.
+
+    NOTE: We coerce the preference expression via `IS TRUE` because comparing
+    against a NULL reviewer_id yields NULL, and Postgres's default
+    `ORDER BY ... DESC` puts NULLs FIRST — which would bias the picker toward
+    playground queries (NULL reviewer_id) over actual batch items. Using
+    `IS TRUE` forces a plain TRUE/FALSE sort key."""
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -452,7 +458,7 @@ async def get_next_unreviewed_query(
             WHERE re.id IS NULL
               AND ql.review_status != 'excluded'
               AND ($1::bigint IS NULL OR ql.id != $1)
-            ORDER BY (ql.reviewer_id = $2) DESC, random()
+            ORDER BY (ql.reviewer_id = $2) IS TRUE DESC, random()
             LIMIT 1
             """,
             exclude_id, batch_user_id,
