@@ -146,6 +146,30 @@ async def regenerate_by_mode(
     return result
 
 
+@router.post(
+    "/{batch_id}/resalvage-empty",
+    summary="Re-queue items whose linked query_log row has an empty answer",
+)
+async def resalvage_empty(
+    batch_id: int,
+    mode: str | None = Query(default=None, pattern="^(rag|websearch)$"),
+):
+    """Find items in this batch that are marked `done` but whose response is
+    effectively empty (the worker used to accept zero-length model output),
+    excise the old empty answers from the reviewer queue, and re-queue the
+    items. Items currently `processing` are skipped."""
+    batch = await db.get_batch_detail(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    result = await db.resalvage_empty_batch_items(batch_id, mode)
+    logger.info(
+        "Resalvage empty batch_id=%d mode=%s: items_reset=%d logs_excluded=%d processing_skipped=%d",
+        batch_id, mode or "all", result["items_reset"], result["logs_excluded"],
+        result["items_processing_skipped"],
+    )
+    return result
+
+
 @router.post("/{batch_id}/cancel", summary="Cancel remaining pending items")
 async def cancel(batch_id: int):
     n = await db.cancel_batch(batch_id)

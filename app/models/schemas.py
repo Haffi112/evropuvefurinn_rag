@@ -270,6 +270,10 @@ class BatchItemDetail(BaseModel):
     query_log_id: int | None = None
     error: str | None = None
     retry_count: int
+    # True if this item's linked query_log row has an empty answer. Older
+    # worker runs accepted empty model responses as "done"; this flag lets
+    # the admin UI surface them for regeneration.
+    response_empty: bool = False
     created_at: datetime
     updated_at: datetime
 

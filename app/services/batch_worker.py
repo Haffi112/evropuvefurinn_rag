@@ -86,6 +86,14 @@ class BatchWorker:
                 # Logging failed — treat as error so we can retry/surface it
                 raise RuntimeError("query_log_id is None (logging failed)")
 
+            # Guard against silent-empty responses: the upstream LLM call can
+            # occasionally return an empty string without raising. Those rows
+            # do get logged (so `query_log_id` is set) but they have nothing
+            # useful for a reviewer. Treat that as a failure so the normal
+            # retry-and-backoff path kicks in.
+            if not (response.answer or "").strip():
+                raise RuntimeError("empty response from model")
+
             await db.complete_batch_item(item_id, query_log_id)
             await db.try_complete_batch(batch_id)
             logger.info("Batch worker: item_id=%d done (query_log_id=%d)", item_id, query_log_id)

@@ -1427,7 +1427,22 @@ async def get_batch_detail(batch_id: int) -> dict | None:
         if not batch:
             return None
         items = await conn.fetch(
-            "SELECT * FROM batch_items WHERE batch_id = $1 ORDER BY id",
+            """
+            SELECT bi.*,
+                   -- True iff this item points at a query_log row whose answer
+                   -- is effectively blank. The worker used to accept empty
+                   -- model responses as successful; this flag lets the admin
+                   -- UI surface them.
+                   (bi.query_log_id IS NOT NULL
+                    AND EXISTS (
+                        SELECT 1 FROM query_log ql
+                        WHERE ql.id = bi.query_log_id
+                          AND (ql.response_text IS NULL OR trim(ql.response_text) = '')
+                    )) AS response_empty
+            FROM batch_items bi
+            WHERE bi.batch_id = $1
+            ORDER BY bi.id
+            """,
             batch_id,
         )
         return {"batch": dict(batch), "items": [dict(r) for r in items]}
@@ -1537,6 +1552,79 @@ async def regenerate_batch_items_by_mode(batch_id: int, mode: str) -> dict:
                     FROM batch_items
                     WHERE batch_id = $1 AND mode = $2
                     FOR UPDATE
+                ),
+                to_reset AS (
+                    SELECT id, query_log_id FROM target WHERE status <> 'processing'
+                ),
+                to_skip AS (
+                    SELECT id FROM target WHERE status = 'processing'
+                ),
+                excluded_logs AS (
+                    UPDATE query_log
+                    SET review_status = 'excluded'
+                    WHERE id IN (
+                        SELECT query_log_id FROM to_reset WHERE query_log_id IS NOT NULL
+                    )
+                    RETURNING id
+                ),
+                reset_items AS (
+                    UPDATE batch_items
+                    SET status = 'pending',
+                        retry_count = 0,
+                        error = NULL,
+                        query_log_id = NULL,
+                        updated_at = now()
+                    WHERE id IN (SELECT id FROM to_reset)
+                    RETURNING id
+                )
+                SELECT
+                    (SELECT COUNT(*) FROM reset_items)      AS items_reset,
+                    (SELECT COUNT(*) FROM excluded_logs)    AS logs_excluded,
+                    (SELECT COUNT(*) FROM to_skip)          AS items_processing_skipped
+                """,
+                batch_id, mode,
+            )
+            await conn.execute(
+                """
+                UPDATE query_batches
+                SET status = 'running', completed_at = NULL
+                WHERE id = $1 AND status = 'completed'
+                """,
+                batch_id,
+            )
+    return dict(row) if row else {
+        "items_reset": 0, "logs_excluded": 0, "items_processing_skipped": 0,
+    }
+
+
+async def resalvage_empty_batch_items(
+    batch_id: int, mode: str | None = None,
+) -> dict:
+    """Re-queue batch items whose linked `query_log` row has an empty answer.
+
+    Historically the worker marked items `done` as long as `query_log_id` was
+    non-null, even when the LLM returned an empty string. This helper
+    identifies those silent failures and puts them back through the normal
+    retry path, and excludes the empty rows from the reviewer queue.
+
+    `mode` optionally restricts the scope to a single mode ('rag' | 'websearch').
+    Items currently in 'processing' are skipped.
+
+    Returns `{items_reset, logs_excluded, items_processing_skipped}`.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                WITH target AS (
+                    SELECT bi.id, bi.query_log_id, bi.status
+                    FROM batch_items bi
+                    JOIN query_log ql ON ql.id = bi.query_log_id
+                    WHERE bi.batch_id = $1
+                      AND ($2::text IS NULL OR bi.mode = $2)
+                      AND (ql.response_text IS NULL OR trim(ql.response_text) = '')
+                    FOR UPDATE OF bi
                 ),
                 to_reset AS (
                     SELECT id, query_log_id FROM target WHERE status <> 'processing'

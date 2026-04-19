@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, BookOpen, Globe, RotateCw, Sparkles, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BookOpen, Globe, RotateCw, Sparkles, Trash2, X } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +32,7 @@ interface BatchItem {
   query_log_id: number | null;
   error: string | null;
   retry_count: number;
+  response_empty: boolean;
 }
 
 interface BatchDetail {
@@ -61,6 +62,22 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
 function ItemCell({ item, onRetry }: { item: BatchItem | undefined; onRetry: (id: number) => void }) {
   if (!item) return <span className="text-xs text-muted-foreground">—</span>;
   if (item.status === "done" && item.query_log_id) {
+    if (item.response_empty) {
+      return (
+        <a
+          href={`/review/queries/${item.query_log_id}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-sm"
+          title="Marked done but the stored response is blank"
+        >
+          <Badge className="border-rose-300 bg-rose-50 text-rose-900 hover:bg-rose-100 dark:border-rose-700/50 dark:bg-rose-950/40 dark:text-rose-100">
+            <AlertTriangle className="mr-1 h-3 w-3" />
+            empty
+          </Badge>
+        </a>
+      );
+    }
     return (
       <a
         href={`/review/queries/${item.query_log_id}`}
@@ -102,6 +119,12 @@ export default function BatchDetailPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [regenMode, setRegenMode] = useState<"rag" | "websearch" | null>(null);
   const [regenResult, setRegenResult] = useState<{
+    items_reset: number;
+    logs_excluded: number;
+    items_processing_skipped: number;
+  } | null>(null);
+  const [emptyOpen, setEmptyOpen] = useState(false);
+  const [emptyResult, setEmptyResult] = useState<{
     items_reset: number;
     logs_excluded: number;
     items_processing_skipped: number;
@@ -161,6 +184,24 @@ export default function BatchDetailPage() {
     }
   };
 
+  const handleResalvageEmpty = async () => {
+    if (!id) return;
+    setActionLoading(true);
+    try {
+      const res = await apiFetch<{
+        items_reset: number;
+        logs_excluded: number;
+        items_processing_skipped: number;
+      }>(`/api/v1/admin/batches/${id}/resalvage-empty`, { method: "POST" });
+      setEmptyResult(res);
+      await fetchBatch();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const handleRegenerate = async () => {
     if (!id || !regenMode) return;
     setActionLoading(true);
@@ -199,6 +240,7 @@ export default function BatchDetailPage() {
   const modeStats = useMemo(() => {
     const empty = () => ({
       total: 0, done: 0, failed: 0, pending: 0, processing: 0, cancelled: 0,
+      empty_response: 0,
     });
     const stats = { rag: empty(), websearch: empty() };
     for (const it of data?.items ?? []) {
@@ -210,9 +252,11 @@ export default function BatchDetailPage() {
       else if (it.status === "pending") s.pending += 1;
       else if (it.status === "processing") s.processing += 1;
       else if (it.status === "cancelled") s.cancelled += 1;
+      if (it.response_empty) s.empty_response += 1;
     }
     return stats;
   }, [data?.items]);
+  const emptyResponseTotal = modeStats.rag.empty_response + modeStats.websearch.empty_response;
 
   if (loading) return <p className="text-sm text-muted-foreground">Loading…</p>;
   if (!data) return <p className="text-sm text-destructive">Batch not found.</p>;
@@ -291,6 +335,25 @@ export default function BatchDetailPage() {
                 {modeStats.websearch.total}
               </span>
             </Button>
+            {emptyResponseTotal > 0 && (
+              <>
+                <span aria-hidden className="h-5 w-px bg-border/60" />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => { setEmptyResult(null); setEmptyOpen(true); }}
+                  disabled={actionLoading}
+                  className="border-rose-300 bg-rose-50 text-rose-900 hover:bg-rose-100 hover:text-rose-900 dark:border-rose-700/50 dark:bg-rose-950/40 dark:text-rose-100 dark:hover:bg-rose-900/40"
+                  title="Find items marked done but whose stored answer is blank, and re-queue them"
+                >
+                  <AlertTriangle className="mr-1.5 h-4 w-4" />
+                  Empty
+                  <span className="ml-1.5 rounded-full bg-rose-200/70 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-rose-900 dark:bg-rose-800/60 dark:text-rose-100">
+                    {emptyResponseTotal}
+                  </span>
+                </Button>
+              </>
+            )}
           </div>
           {failed > 0 && (
             <Button variant="outline" size="sm" onClick={handleRetryFailed} disabled={actionLoading}>
@@ -439,6 +502,132 @@ export default function BatchDetailPage() {
               </>
             );
           })()}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={emptyOpen}
+        onOpenChange={(o) => {
+          if (!o) { setEmptyOpen(false); setEmptyResult(null); }
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <div className="mb-2 inline-flex w-fit items-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-xs font-medium text-rose-900 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-100">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              silent failures
+            </div>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-rose-600 dark:text-rose-400" />
+              Regenerate blank answers?
+            </DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-3 pt-2 text-sm">
+                {!emptyResult && (
+                  <>
+                    <p>
+                      We found{" "}
+                      <span className="font-semibold text-foreground">
+                        {emptyResponseTotal}
+                      </span>{" "}
+                      item
+                      {emptyResponseTotal === 1 ? "" : "s"} marked{" "}
+                      <code className="rounded bg-muted px-1 py-0.5">done</code> whose stored
+                      response is blank — the model returned an empty string without raising,
+                      so the worker accepted it as success.
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="rounded-md border border-amber-200 bg-amber-50/70 p-2 dark:border-amber-900/60 dark:bg-amber-950/30">
+                        <div className="flex items-center gap-1.5 text-amber-900 dark:text-amber-100">
+                          <BookOpen className="h-3.5 w-3.5" />
+                          <span className="font-medium">RAG</span>
+                        </div>
+                        <p className="mt-1 tabular-nums text-amber-900/80 dark:text-amber-100/80">
+                          {modeStats.rag.empty_response} blank
+                        </p>
+                      </div>
+                      <div className="rounded-md border border-sky-200 bg-sky-50/70 p-2 dark:border-sky-900/60 dark:bg-sky-950/30">
+                        <div className="flex items-center gap-1.5 text-sky-900 dark:text-sky-100">
+                          <Globe className="h-3.5 w-3.5" />
+                          <span className="font-medium">Web search</span>
+                        </div>
+                        <p className="mt-1 tabular-nums text-sky-900/80 dark:text-sky-100/80">
+                          {modeStats.websearch.empty_response} blank
+                        </p>
+                      </div>
+                    </div>
+                    <div className="rounded-md border bg-muted/40 p-3 text-xs leading-relaxed">
+                      <p className="mb-1 font-medium text-foreground">What happens</p>
+                      <ul className="ml-4 list-disc space-y-1 text-muted-foreground">
+                        <li>
+                          Each blank <code className="rounded bg-background px-1 py-0.5">query_log</code>{" "}
+                          row is marked <code className="rounded bg-background px-1 py-0.5">excluded</code>{" "}
+                          so it disappears from the reviewer queue.
+                        </li>
+                        <li>
+                          The batch items are reset to{" "}
+                          <code className="rounded bg-background px-1 py-0.5">pending</code>{" "}
+                          and the worker will re-run them (Pro model, cache bypassed).
+                        </li>
+                        <li>
+                          Items currently{" "}
+                          <code className="rounded bg-background px-1 py-0.5">processing</code>{" "}
+                          are skipped — re-run this once they finish.
+                        </li>
+                      </ul>
+                    </div>
+                  </>
+                )}
+                {emptyResult && (
+                  <div className="space-y-2 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm dark:border-emerald-900/60 dark:bg-emerald-950/40">
+                    <p className="font-medium text-emerald-900 dark:text-emerald-100">
+                      Queued for regeneration.
+                    </p>
+                    <ul className="ml-4 list-disc space-y-0.5 text-xs text-emerald-900/90 dark:text-emerald-100/90">
+                      <li>{emptyResult.items_reset} items reset to pending</li>
+                      <li>{emptyResult.logs_excluded} blank answers excluded from review</li>
+                      {emptyResult.items_processing_skipped > 0 && (
+                        <li>
+                          {emptyResult.items_processing_skipped} skipped (worker was mid-flight —
+                          rerun when they settle)
+                        </li>
+                      )}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            {!emptyResult ? (
+              <>
+                <Button
+                  variant="ghost"
+                  onClick={() => setEmptyOpen(false)}
+                  disabled={actionLoading}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleResalvageEmpty}
+                  disabled={actionLoading || emptyResponseTotal === 0}
+                  className="bg-rose-600 text-white hover:bg-rose-700 dark:bg-rose-600 dark:hover:bg-rose-500"
+                >
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  {actionLoading
+                    ? "Queueing…"
+                    : `Regenerate ${emptyResponseTotal} blank answer${emptyResponseTotal === 1 ? "" : "s"}`}
+                </Button>
+              </>
+            ) : (
+              <Button
+                onClick={() => { setEmptyOpen(false); setEmptyResult(null); }}
+                variant="outline"
+              >
+                Close
+              </Button>
+            )}
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
