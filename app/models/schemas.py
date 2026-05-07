@@ -101,6 +101,16 @@ class QueryRequest(BaseModel):
     language: str = Field(default="auto", description="Response language: 'is', 'en', or 'auto' (detect from query).")
     score_threshold: float | None = Field(default=None, ge=0.0, le=1.0, description="Minimum relevance score to include a source (0.0–1.0). Omit to use the server default.")
     include_thinking: bool = Field(default=False, description="If true, include the model's chain-of-thought reasoning in the response.")
+    model: str | None = Field(
+        default=None,
+        max_length=32,
+        description=(
+            "Optional model selector. 'pro' selects Gemini 3.1 Pro; any other "
+            "value (including omission, empty string, or unrecognised labels) "
+            "selects Gemini 3 Flash. Matching is case-insensitive and "
+            "whitespace-trimmed."
+        ),
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
