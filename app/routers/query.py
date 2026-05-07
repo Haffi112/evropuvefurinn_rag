@@ -50,7 +50,11 @@ async def query_endpoint(request: Request, body: QueryRequest):
     rag = _get_rag(request)
     ip_address = request.client.host if request.client else None
     start_time = time.monotonic()
-    logger.info("Query received: stream=%s lang=%s ip=%s", body.stream, body.language, ip_address)
+    resolved_model = _resolve_model(body.model)
+    logger.info(
+        "Query received: stream=%s lang=%s model=%s resolved=%s ip=%s",
+        body.stream, body.language, body.model, resolved_model, ip_address,
+    )
 
     if body.stream:
         return EventSourceResponse(
@@ -59,6 +63,7 @@ async def query_endpoint(request: Request, body: QueryRequest):
                 ip_address=ip_address, start_time=start_time,
                 score_threshold=body.score_threshold,
                 include_thinking=body.include_thinking,
+                model_override=resolved_model,
             )
         )
 
@@ -68,6 +73,7 @@ async def query_endpoint(request: Request, body: QueryRequest):
             ip_address=ip_address, start_time=start_time,
             score_threshold=body.score_threshold,
             include_thinking=body.include_thinking,
+            model_override=resolved_model,
         )
     except Exception:
         logger.error("Non-streaming query failed", exc_info=True)
