@@ -15,8 +15,16 @@ from app.services.embedding_service import EmbeddingService
 logger = logging.getLogger(__name__)
 
 
-def _query_hash(query: str) -> str:
-    normalized = query.strip().lower()
+def _query_hash(query: str, model_role: str = "auto") -> str:
+    """SHA-256 of normalised query text, namespaced by model role.
+
+    The role prefix ensures Pro and Flash answers occupy separate cache
+    rows in `query_cache`, so a `model: "pro"` request never returns a
+    cached Flash answer and vice versa. Role ``"auto"`` (default) preserves
+    the existing single-namespace behaviour for callers that don't pass a
+    role (the admin playground and the batch worker).
+    """
+    normalized = f"{model_role}|{query.strip().lower()}"
     return hashlib.sha256(normalized.encode()).hexdigest()
 
 
