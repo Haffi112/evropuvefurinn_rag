@@ -26,3 +26,13 @@ def test_query_hash_separates_auto_from_pro_and_flash():
     pro = _query_hash("Hvað er ESB?", "pro")
     flash = _query_hash("Hvað er ESB?", "flash")
     assert len({auto, pro, flash}) == 3
+
+
+def test_query_hash_call_site_pattern():
+    # Mirrors how rag_service.py uses _query_hash:
+    #   _query_hash(query, model_override or "auto")
+    # so that None (playground/batch) → "auto" namespace, while "pro"/"flash"
+    # (public endpoint after _resolve_model) get their own namespaces.
+    assert _query_hash("q", None or "auto") == _query_hash("q", "auto")
+    assert _query_hash("q", "pro" or "auto") == _query_hash("q", "pro")
+    assert _query_hash("q", "flash" or "auto") == _query_hash("q", "flash")
