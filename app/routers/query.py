@@ -13,6 +13,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["query"])
 
 
+def _resolve_model(raw: str | None) -> str:
+    """Map the public `model` param to an internal role.
+
+    Returns ``"pro"`` only for an explicit case-insensitive ``"pro"`` (with
+    optional surrounding whitespace). Anything else — including ``None``, the
+    empty string, or unknown labels like ``"gemini-3.1-pro"`` — returns
+    ``"flash"``. This is the public-API default and differs from the internal
+    ``model_override=None`` semantics used by the playground (auto/quota).
+    """
+    if raw is None:
+        return "flash"
+    return "pro" if raw.strip().lower() == "pro" else "flash"
+
+
 def _get_rag(request: Request) -> RAGService:
     return request.app.state.rag
 
