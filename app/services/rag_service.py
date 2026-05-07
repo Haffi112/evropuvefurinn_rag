@@ -191,7 +191,7 @@ class RAGService:
         model_override: str | None = None, skip_cache: bool = False,
     ) -> QueryResponse:
         query_id = f"q_{uuid.uuid4().hex[:12]}"
-        qhash = _query_hash(query)
+        qhash = _query_hash(query, model_override or "auto")
         threshold = score_threshold if score_threshold is not None else self._settings.rag_score_threshold
         bypass_cache = include_thinking or skip_cache
 
@@ -344,7 +344,7 @@ class RAGService:
                                       reviewer_id=reviewer_id, mode="websearch")
                 return
 
-            qhash = _query_hash(query)
+            qhash = _query_hash(query, model_override or "auto")
             threshold = score_threshold if score_threshold is not None else self._settings.rag_score_threshold
 
             # Cache check (skip when thinking or skip_cache)
