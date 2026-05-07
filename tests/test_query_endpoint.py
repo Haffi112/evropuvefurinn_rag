@@ -13,23 +13,26 @@ class FakeRAG:
         self.calls: list[dict] = []
 
     async def process_query_json(self, query, top_k, language, **kwargs):
-        self.calls.append({"query": query, "kwargs": kwargs})
+        self.calls.append({"stream": False, "query": query, "kwargs": kwargs})
         return {
             "query": query,
             "answer": "stub",
             "references": [],
-            "model_used": f"google/gemini-3-{kwargs.get('model_override')}-preview",
+            "model_used": f"google/gemini-3-{kwargs.get('model_override') or 'flash'}-preview",
             "cached": False,
             "query_id": "test-id",
             "query_log_id": None,
             "scope_declined": False,
         }
 
+    async def process_query_stream(self, query, top_k, language, **kwargs):
+        self.calls.append({"stream": True, "query": query, "kwargs": kwargs})
+        # Yield the SSE events shape so EventSourceResponse is happy.
+        yield {"event": "done", "data": "{}"}
+
 
 @pytest.fixture
 def client_and_fake(monkeypatch):
-    # Disable rate limiting for these tests so 10/minute doesn't bite.
-    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
     # `app.main` opens a Postgres connection at lifespan startup, which would
     # block the TestClient in environments without a live DB. Mount the query
     # router on a fresh FastAPI app instead — that exercises the same router
@@ -37,6 +40,12 @@ def client_and_fake(monkeypatch):
     from fastapi import FastAPI
     from app.routers.query import router as query_router
     from app.middleware.rate_limit import limiter
+
+    # The @limiter.limit("10/minute") decorator on query_endpoint is otherwise
+    # unconditionally active; disabling slowapi's module-level flag bypasses
+    # it. monkeypatch.setattr auto-restores after the test so other tests in
+    # the same process aren't affected.
+    monkeypatch.setattr(limiter, "enabled", False)
 
     app = FastAPI()
     app.include_router(query_router)
@@ -100,3 +109,17 @@ def test_oversized_model_string_returns_422(client_and_fake):
     # max_length=32; 33 chars should be rejected by Pydantic.
     r = _post(client, model="x" * 33)
     assert r.status_code == 422
+
+
+def test_streaming_branch_forwards_model_override(client_and_fake):
+    # Pin down that the stream=True call site forwards model_override too —
+    # a refactor that drops it from `process_query_stream(...)` should fail
+    # this test.
+    client, fake = client_and_fake
+    r = client.post(
+        "/api/v1/query",
+        json={"query": "Hvað er ESB?", "stream": True, "model": "pro"},
+    )
+    assert r.status_code == 200
+    assert fake.calls[-1]["stream"] is True
+    assert fake.calls[-1]["kwargs"]["model_override"] == "pro"
