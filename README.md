@@ -94,6 +94,8 @@ All endpoints are prefixed with `/api/v1`.
 |--------|------|------|-------------|
 | `POST` | `/query` | none | Ask a question (supports SSE streaming) |
 
+`POST /query` accepts an optional `model` field: `"pro"` selects Gemini 3.1 Pro, anything else (including omission) selects Gemini 3 Flash.
+
 ### Admin
 
 | Method | Path | Auth | Description |
@@ -149,6 +151,16 @@ curl -N -X POST http://localhost:8000/api/v1/query \
 ```
 
 SSE events: `references` (sources found), `chunk` (answer tokens), `done` (final metadata).
+
+**Force the Pro model:**
+
+```bash
+curl -X POST http://localhost:8000/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Hvað er ESB?", "stream": false, "model": "pro"}'
+```
+
+Without `model`, requests use Gemini 3 Flash. Pass `"model": "pro"` to opt into Gemini 3.1 Pro. Unrecognised values (e.g. `"banana"`) fall back to Flash. Pro and Flash answers are cached under separate keys, so identical queries with different `model` values do not collide.
 
 ## Architecture
 

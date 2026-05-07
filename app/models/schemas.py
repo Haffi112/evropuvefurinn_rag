@@ -119,6 +119,7 @@ class QueryRequest(BaseModel):
                 "stream": True,
                 "top_k": 5,
                 "language": "auto",
+                "model": "pro",
             }
         }
     )
