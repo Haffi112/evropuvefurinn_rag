@@ -22,6 +22,8 @@ interface ReviewerStats {
   avg_duration_seconds: number | null;
   total_duration_seconds: number;
   queue_remaining: number;
+  total_in_scope: number;
+  reviewed_by_me: number;
   daily_activity: { day: string; count: number }[];
   mode_split: { mode: string; count: number }[];
   checklist_pass_rates: {
@@ -120,7 +122,11 @@ export default function ReviewerStatsPage() {
         <Metric
           label="Queue remaining"
           value={data.queue_remaining.toLocaleString()}
-          hint="across all reviewers"
+          hint={
+            data.total_in_scope > 0
+              ? `${data.reviewed_by_me} / ${data.total_in_scope} done`
+              : "your queue"
+          }
           accent="amber"
         />
       </div>
@@ -183,7 +189,7 @@ export default function ReviewerStatsPage() {
             Recent reviews
           </h2>
           <Link
-            to="/queries?review_status=reviewed"
+            to="/queries?mine_filter=done"
             className="text-xs text-primary hover:underline"
           >
             View all →

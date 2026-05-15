@@ -384,6 +384,7 @@ async def list_query_logs_for_review(
     review_status: str | None = None,
     search: str | None = None,
     viewer_id: int | None = None,
+    mine_filter: str | None = None,
 ) -> tuple[list[dict], int]:
     """List queries for the reviewer queue.
 
@@ -392,6 +393,11 @@ async def list_query_logs_for_review(
       - reviewer_usernames: list of those usernames
       - reviewer_username:  comma-joined string (backward compat)
       - i_evaluated:        whether the calling reviewer (viewer_id) has evaluated
+
+    mine_filter (requires viewer_id):
+      - None       → no per-viewer filter
+      - 'pending'  → only queries this viewer has NOT evaluated
+      - 'done'     → only queries this viewer HAS evaluated
     """
     pool = get_pool()
     offset = (page - 1) * per_page
@@ -414,9 +420,28 @@ async def list_query_logs_for_review(
         params.append(f"%{search}%")
         idx += 1
 
+    # Per-viewer filter — only applied when viewer_id and mine_filter are set.
+    if viewer_id is not None and mine_filter == "pending":
+        conditions.append(
+            f"NOT EXISTS (SELECT 1 FROM review_evaluations re_mf "
+            f"WHERE re_mf.query_log_id = ql.id AND re_mf.reviewer_id = ${idx})"
+        )
+        params.append(viewer_id)
+        idx += 1
+    elif viewer_id is not None and mine_filter == "done":
+        conditions.append(
+            f"EXISTS (SELECT 1 FROM review_evaluations re_mf "
+            f"WHERE re_mf.query_log_id = ql.id AND re_mf.reviewer_id = ${idx})"
+        )
+        params.append(viewer_id)
+        idx += 1
+
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-    # $idx → viewer_id, $idx+1 → per_page, $idx+2 → offset
+    # $idx → viewer_id (for SELECT-side i_evaluated), $idx+1 → per_page,
+    # $idx+2 → offset. viewer_id is passed twice in the worst case (once in
+    # WHERE via mine_filter, once in SELECT for i_evaluated) — fine, asyncpg
+    # handles repeated positional values.
     viewer_param_idx = idx
     limit_idx = idx + 1
     offset_idx = idx + 2
@@ -925,13 +950,27 @@ async def get_reviewer_stats(reviewer_id: int) -> dict:
             reviewer_id,
         )
 
-        queue_remaining = await conn.fetchval(
+        # Per-reviewer queue: queries this reviewer has NOT evaluated and that
+        # aren't excluded. (The previous global "zero evals anywhere" semantic
+        # was wrong under multi-annotator — each reviewer now has their own
+        # remaining queue.)
+        scope = await conn.fetchrow(
             """
-            SELECT COUNT(*) FROM query_log ql
-            LEFT JOIN review_evaluations re ON re.query_log_id = ql.id
-            WHERE re.id IS NULL AND ql.review_status != 'excluded'
-            """
+            SELECT
+                COUNT(*) AS total_in_scope,
+                COUNT(*) FILTER (
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM review_evaluations re
+                        WHERE re.query_log_id = ql.id AND re.reviewer_id = $1
+                    )
+                ) AS queue_remaining
+            FROM query_log ql
+            WHERE ql.review_status != 'excluded'
+            """,
+            reviewer_id,
         )
+        total_in_scope = scope["total_in_scope"]
+        queue_remaining = scope["queue_remaining"]
 
         daily_rows = await conn.fetch(
             """
@@ -990,7 +1029,10 @@ async def get_reviewer_stats(reviewer_id: int) -> dict:
         "median_duration_seconds": float(totals["median_duration"]) if totals["median_duration"] is not None else None,
         "avg_duration_seconds": float(totals["avg_duration"]) if totals["avg_duration"] is not None else None,
         "total_duration_seconds": int(totals["total_duration"]) if totals["total_duration"] is not None else 0,
+        # Per-reviewer queue progress
         "queue_remaining": queue_remaining,
+        "total_in_scope": total_in_scope,
+        "reviewed_by_me": totals["total"],
         "daily_activity": [{"day": r["day"].isoformat(), "count": r["count"]} for r in daily_rows],
         "mode_split": [{"mode": r["mode"], "count": r["count"]} for r in mode_rows],
         "checklist_pass_rates": [

@@ -154,6 +154,199 @@ def test_review_query_detail_defaults_all_evaluations_to_empty():
 # ── CSV export: 7-key checklist + failed_checks column ─────
 
 
+# ── Reviewer-facing list endpoint: sanitization + filter ──
+
+
+def test_list_queries_sanitizes_cross_reviewer_fields(monkeypatch):
+    """The /api/v1/review/queries endpoint must strip reviewer_username,
+    reviewer_usernames, evaluation_count, and replace review_status with
+    a per-reviewer label so reviewers cannot see peer evaluations."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.routers import review as review_router
+    from app.middleware.review_auth import ReviewUser
+
+    captured: dict = {}
+
+    async def fake_list(**kwargs):
+        captured.update(kwargs)
+        rows = [
+            {
+                "id": 1, "query_text": "q1", "model_used": "flash",
+                "review_status": "approved",  # cross-reviewer aggregate (should be replaced)
+                "cached": False,
+                "created_at": "2026-05-15T10:00:00+00:00",
+                "mode": "rag",
+                "submitted_by": None,
+                "evaluation_count": 3,
+                "reviewer_usernames": ["alice", "bob", "carol"],
+                "reviewer_username": "alice, bob, carol",
+                "i_evaluated": True,
+            },
+            {
+                "id": 2, "query_text": "q2", "model_used": "flash",
+                "review_status": "reviewed",
+                "cached": False,
+                "created_at": "2026-05-15T11:00:00+00:00",
+                "mode": "websearch",
+                "submitted_by": None,
+                "evaluation_count": 1,
+                "reviewer_usernames": ["alice"],
+                "reviewer_username": "alice",
+                "i_evaluated": False,
+            },
+        ]
+        return rows, len(rows)
+
+    async def fake_verify():
+        return ReviewUser(id=42, username="bob")
+
+    monkeypatch.setattr(review_router.db, "list_query_logs_for_review", fake_list)
+    app = FastAPI()
+    app.include_router(review_router.router)
+    app.dependency_overrides[review_router.verify_review_token] = fake_verify
+
+    with TestClient(app) as client:
+        r = client.get("/api/v1/review/queries?mine_filter=pending")
+
+    assert r.status_code == 200, r.text
+    # The filter was threaded through to the DB layer
+    assert captured["mine_filter"] == "pending"
+    assert captured["viewer_id"] == 42
+
+    body = r.json()
+    for q in body["queries"]:
+        # Cross-reviewer fields stripped
+        assert q["reviewer_username"] is None
+        assert q["reviewer_usernames"] == []
+        assert q["evaluation_count"] == 0
+        # Status replaced with per-reviewer label
+        assert q["review_status"] in ("done", "pending")
+
+    # i_evaluated → done; otherwise → pending
+    assert body["queries"][0]["review_status"] == "done"
+    assert body["queries"][1]["review_status"] == "pending"
+
+
+def test_list_queries_default_filter_is_pending(monkeypatch):
+    """Default mine_filter for /api/v1/review/queries is 'pending' so
+    reviewers see their to-do queue, not everything."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.routers import review as review_router
+    from app.middleware.review_auth import ReviewUser
+
+    captured: dict = {}
+
+    async def fake_list(**kwargs):
+        captured.update(kwargs)
+        return [], 0
+
+    async def fake_verify():
+        return ReviewUser(id=1, username="alice")
+
+    monkeypatch.setattr(review_router.db, "list_query_logs_for_review", fake_list)
+    app = FastAPI()
+    app.include_router(review_router.router)
+    app.dependency_overrides[review_router.verify_review_token] = fake_verify
+
+    with TestClient(app) as client:
+        r = client.get("/api/v1/review/queries")
+
+    assert r.status_code == 200
+    assert captured["mine_filter"] == "pending"
+
+
+def test_list_queries_mine_filter_all_disables_per_viewer_filter(monkeypatch):
+    """mine_filter=all maps to None in the DB call so legacy callers can opt out."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.routers import review as review_router
+    from app.middleware.review_auth import ReviewUser
+
+    captured: dict = {}
+
+    async def fake_list(**kwargs):
+        captured.update(kwargs)
+        return [], 0
+
+    async def fake_verify():
+        return ReviewUser(id=1, username="alice")
+
+    monkeypatch.setattr(review_router.db, "list_query_logs_for_review", fake_list)
+    app = FastAPI()
+    app.include_router(review_router.router)
+    app.dependency_overrides[review_router.verify_review_token] = fake_verify
+
+    with TestClient(app) as client:
+        r = client.get("/api/v1/review/queries?mine_filter=all")
+
+    assert r.status_code == 200
+    assert captured["mine_filter"] is None
+
+
+def test_query_detail_strips_peer_evaluations(monkeypatch):
+    """The reviewer detail endpoint must omit peer evaluations and replace
+    review_status with a per-reviewer label."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.routers import review as review_router
+    from app.middleware.review_auth import ReviewUser
+
+    async def fake_get_detail(qid):
+        return {
+            "id": qid,
+            "query_text": "q",
+            "response_text": "a",
+            "model_used": "flash",
+            "references": [],
+            "scope_declined": False,
+            "cached": False,
+            "latency_ms": 100,
+            "ip_address": None,
+            "created_at": datetime.now(timezone.utc),
+            # Aggregate status (would leak peer agreement)
+            "review_status": "approved",
+            "mode": "rag",
+        }
+
+    async def fake_get_eval_for_reviewer(qid, rid):
+        return None  # this reviewer hasn't evaluated yet
+
+    async def fake_get_all_evals(qid):
+        # Peers exist — but the endpoint must not return this
+        return [{"id": 99, "reviewer_id": 7, "reviewer_username": "peer"}]
+
+    async def fake_get_article(qid):
+        return None
+
+    async def fake_verify():
+        return ReviewUser(id=42, username="bob")
+
+    monkeypatch.setattr(review_router.db, "get_query_log_detail", fake_get_detail)
+    monkeypatch.setattr(review_router.db, "get_evaluation_for_reviewer", fake_get_eval_for_reviewer)
+    monkeypatch.setattr(review_router.db, "get_all_evaluations_for_query", fake_get_all_evals)
+    monkeypatch.setattr(review_router.db, "get_latest_reviewed_article", fake_get_article)
+
+    app = FastAPI()
+    app.include_router(review_router.router)
+    app.dependency_overrides[review_router.verify_review_token] = fake_verify
+
+    with TestClient(app) as client:
+        r = client.get("/api/v1/review/queries/123")
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # Aggregate status replaced with personal label
+    assert body["review_status"] == "pending"
+    # Peer evaluations not exposed
+    assert body["all_evaluations"] == []
+
+
 def test_csv_export_includes_seventh_checklist_key_and_failed_checks():
     from app.routers.admin import _write_evaluations_csv
 

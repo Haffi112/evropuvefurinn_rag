@@ -58,23 +58,47 @@ async def review_login(body: ReviewLoginRequest):
 @router.get(
     "/queries",
     response_model=ReviewQueryListResponse,
-    summary="List queries for review",
+    summary="List queries for review (per-reviewer queue)",
+    description="Returns this reviewer's queue. By default (`mine_filter=pending`) "
+    "shows only queries the calling reviewer has not yet evaluated. "
+    "`mine_filter=done` shows queries this reviewer has evaluated; "
+    "`mine_filter=all` returns everything (mostly for legacy callers). "
+    "Cross-reviewer fields (reviewer_username, reviewer_usernames, "
+    "evaluation_count) and the aggregate review_status are stripped from the "
+    "response so reviewers cannot see what their peers have done.",
 )
 async def list_queries(
     reviewer: ReviewUser = Depends(verify_review_token),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=30, ge=1, le=100),
-    review_status: str | None = Query(default=None),
     search: str | None = Query(default=None, max_length=200),
+    mine_filter: str = Query(
+        default="pending",
+        pattern="^(pending|done|all)$",
+        description="'pending' = my todo; 'done' = my finished; 'all' = no per-reviewer filter",
+    ),
 ):
+    db_filter = None if mine_filter == "all" else mine_filter
     rows, total = await db.list_query_logs_for_review(
         page=page, per_page=per_page,
-        review_status=review_status, search=search,
-        viewer_id=reviewer.id,
+        review_status=None, search=search,
+        viewer_id=reviewer.id, mine_filter=db_filter,
     )
+    # Strip cross-reviewer fields so reviewers can't see what peers have done.
+    # i_evaluated is the only per-reviewer signal we keep.
+    sanitized = []
+    for r in rows:
+        sr = {**r}
+        sr["reviewer_username"] = None
+        sr["reviewer_usernames"] = []
+        sr["evaluation_count"] = 0
+        # Cross-reviewer aggregate status leaks info too — replace with a
+        # personal label derived from i_evaluated.
+        sr["review_status"] = "done" if sr.get("i_evaluated") else "pending"
+        sanitized.append(sr)
     total_pages = (total + per_page - 1) // per_page
     return ReviewQueryListResponse(
-        queries=rows, total=total, page=page,
+        queries=sanitized, total=total, page=page,
         per_page=per_page, total_pages=total_pages,
     )
 
@@ -193,13 +217,19 @@ async def get_query_detail(
         row["references"] = json.loads(refs)
 
     evaluation = await db.get_evaluation_for_reviewer(query_id, reviewer.id)
-    all_evaluations = await db.get_all_evaluations_for_query(query_id)
     latest_article = await db.get_latest_reviewed_article(query_id)
+
+    # Replace the cross-reviewer aggregate review_status with a per-reviewer
+    # label so the detail page doesn't leak peer evaluations either.
+    row = {**row, "review_status": "done" if evaluation else "pending"}
 
     return ReviewQueryDetail(
         **row,
         evaluation=evaluation,
-        all_evaluations=all_evaluations,
+        # all_evaluations deliberately omitted: peer evaluations are not
+        # exposed on the reviewer-facing endpoint. Admin endpoints keep
+        # full visibility.
+        all_evaluations=[],
         latest_article=latest_article,
     )
 

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { Search } from "lucide-react";
+import { CheckCircle2, CircleDashed, Search } from "lucide-react";
 import { reviewFetch } from "@review/lib/review-api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,10 +23,11 @@ interface ReviewQueryItem {
   id: number;
   query_text: string;
   model_used: string | null;
+  // Server sanitizes this to a per-reviewer label: 'pending' | 'done'.
   review_status: string;
   cached: boolean;
   created_at: string;
-  reviewer_username: string | null;
+  i_evaluated: boolean;
   mode: "rag" | "websearch";
 }
 
@@ -38,90 +39,140 @@ interface ReviewQueryList {
   total_pages: number;
 }
 
-const STATUS_TABS = ["all", "pending", "reviewed", "approved"] as const;
-
-function statusBadgeVariant(status: string) {
-  switch (status) {
-    case "approved":
-      return "default" as const;
-    case "reviewed":
-      return "secondary" as const;
-    default:
-      return "outline" as const;
-  }
+interface ReviewerStats {
+  total: number;
+  queue_remaining: number;
+  total_in_scope: number;
+  reviewed_by_me: number;
 }
+
+type MineFilter = "pending" | "done";
+
+const TABS: { value: MineFilter; label: string }[] = [
+  { value: "pending", label: "To do" },
+  { value: "done", label: "Done" },
+];
 
 export default function ReviewListPage() {
   const navigate = useNavigate();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [mineFilter, setMineFilter] = useState<MineFilter>("pending");
 
   const params = new URLSearchParams();
   params.set("page", String(page));
   params.set("per_page", "30");
+  params.set("mine_filter", mineFilter);
   if (search) params.set("search", search);
-  if (statusFilter !== "all") params.set("review_status", statusFilter);
 
   const { data, isLoading } = useQuery<ReviewQueryList>({
-    queryKey: ["review-queries", page, search, statusFilter],
+    queryKey: ["review-queries", page, search, mineFilter],
     queryFn: () => reviewFetch(`/api/v1/review/queries?${params}`),
   });
 
-  // Fetch all to compute counts
-  const allQuery = useQuery<ReviewQueryList>({
-    queryKey: ["review-queries-stats"],
-    queryFn: () => reviewFetch("/api/v1/review/queries?per_page=1"),
-    staleTime: 60_000,
+  // Personal progress — pulled from /review/stats which now returns
+  // per-reviewer queue progress (reviewed_by_me, queue_remaining,
+  // total_in_scope).
+  const stats = useQuery<ReviewerStats>({
+    queryKey: ["reviewer-stats-queue"],
+    queryFn: () => reviewFetch("/api/v1/review/stats"),
+    staleTime: 15_000,
+    refetchInterval: 30_000,
   });
-  const pendingQuery = useQuery<ReviewQueryList>({
-    queryKey: ["review-queries-stats-pending"],
-    queryFn: () =>
-      reviewFetch("/api/v1/review/queries?per_page=1&review_status=pending"),
-    staleTime: 60_000,
-  });
-  const reviewedQuery = useQuery<ReviewQueryList>({
-    queryKey: ["review-queries-stats-reviewed"],
-    queryFn: () =>
-      reviewFetch("/api/v1/review/queries?per_page=1&review_status=reviewed"),
-    staleTime: 60_000,
-  });
-  const approvedQuery = useQuery<ReviewQueryList>({
-    queryKey: ["review-queries-stats-approved"],
-    queryFn: () =>
-      reviewFetch("/api/v1/review/queries?per_page=1&review_status=approved"),
-    staleTime: 60_000,
-  });
+
+  const reviewed = stats.data?.reviewed_by_me ?? 0;
+  const totalInScope = stats.data?.total_in_scope ?? 0;
+  const remaining = stats.data?.queue_remaining ?? 0;
+  const progressPct =
+    totalInScope > 0 ? Math.min(100, Math.round((100 * reviewed) / totalInScope)) : 0;
 
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold">Queries</h1>
+      <div>
+        <h1 className="text-3xl font-bold">Your queue</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {remaining > 0
+            ? `${remaining.toLocaleString()} ${remaining === 1 ? "query" : "queries"} left for you to review.`
+            : "You're all caught up — nothing left to review."}
+        </p>
+      </div>
 
-      {/* Stats bar */}
-      <div className="grid gap-4 sm:grid-cols-4">
-        <MiniStat label="Total" value={allQuery.data?.total ?? "..."} />
-        <MiniStat label="Pending" value={pendingQuery.data?.total ?? "..."} />
-        <MiniStat label="Reviewed" value={reviewedQuery.data?.total ?? "..."} />
-        <MiniStat label="Approved" value={approvedQuery.data?.total ?? "..."} />
+      {/* Personal progress */}
+      <Card className="card-accent">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+            Your progress
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-baseline justify-between">
+            <div className="text-2xl font-bold tabular-nums text-primary">
+              {stats.isLoading ? (
+                <Skeleton className="h-7 w-32" />
+              ) : (
+                <>
+                  {reviewed.toLocaleString()}
+                  <span className="ml-1 text-base font-normal text-muted-foreground">
+                    / {totalInScope.toLocaleString()} reviewed
+                  </span>
+                </>
+              )}
+            </div>
+            <span className="text-sm font-semibold tabular-nums text-muted-foreground">
+              {progressPct}%
+            </span>
+          </div>
+          {/* Progress bar */}
+          <div
+            className="h-2 w-full overflow-hidden rounded-full bg-muted"
+            role="progressbar"
+            aria-valuenow={progressPct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div
+              className="h-full bg-primary transition-all duration-500"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Personal mini-stats */}
+      <div className="grid gap-4 sm:grid-cols-3">
+        <MiniStat
+          label="Reviewed by you"
+          value={stats.isLoading ? "..." : reviewed.toLocaleString()}
+          icon={<CheckCircle2 className="h-4 w-4 text-emerald-500" />}
+        />
+        <MiniStat
+          label="Remaining for you"
+          value={stats.isLoading ? "..." : remaining.toLocaleString()}
+          icon={<CircleDashed className="h-4 w-4 text-amber-500" />}
+        />
+        <MiniStat
+          label="Total in scope"
+          value={stats.isLoading ? "..." : totalInScope.toLocaleString()}
+        />
       </div>
 
       {/* Filter tabs + search */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex gap-1 rounded-sm border bg-muted p-1">
-          {STATUS_TABS.map((tab) => (
+          {TABS.map((tab) => (
             <button
-              key={tab}
+              key={tab.value}
               onClick={() => {
-                setStatusFilter(tab);
+                setMineFilter(tab.value);
                 setPage(1);
               }}
               className={`rounded-sm px-3 py-1.5 text-sm font-medium transition-colors ${
-                statusFilter === tab
+                mineFilter === tab.value
                   ? "bg-background text-primary shadow-sm"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {tab.label}
             </button>
           ))}
         </div>
@@ -155,7 +206,6 @@ export default function ReviewListPage() {
                 <TableHead className="w-24">Source</TableHead>
                 <TableHead>Model</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Reviewed by</TableHead>
                 <TableHead>Date</TableHead>
               </TableRow>
             </TableHeader>
@@ -174,16 +224,21 @@ export default function ReviewListPage() {
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className="text-xs">
-                      {q.model_used ?? "\u2014"}
+                      {q.model_used ?? "—"}
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={statusBadgeVariant(q.review_status)}>
-                      {q.review_status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {q.reviewer_username ?? "\u2014"}
+                    {q.i_evaluated ? (
+                      <Badge variant="default" className="gap-1 text-xs">
+                        <CheckCircle2 className="h-3 w-3" />
+                        Done by you
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="gap-1 text-xs">
+                        <CircleDashed className="h-3 w-3" />
+                        To review
+                      </Badge>
+                    )}
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {formatDistanceToNow(new Date(q.created_at), {
@@ -195,10 +250,12 @@ export default function ReviewListPage() {
               {data?.queries.length === 0 && (
                 <TableRow>
                   <TableCell
-                    colSpan={6}
-                    className="text-center text-muted-foreground"
+                    colSpan={5}
+                    className="py-8 text-center text-muted-foreground"
                   >
-                    No queries found
+                    {mineFilter === "pending"
+                      ? "Nothing left for you to review — great work."
+                      : "You haven't completed any reviews yet."}
                   </TableCell>
                 </TableRow>
               )}
@@ -237,19 +294,22 @@ export default function ReviewListPage() {
 function MiniStat({
   label,
   value,
+  icon,
 }: {
   label: string;
   value: string | number;
+  icon?: React.ReactNode;
 }) {
   return (
     <Card className="card-accent">
       <CardHeader className="pb-2">
-        <CardTitle className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+        <CardTitle className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+          {icon}
           {label}
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="text-xl font-bold text-primary">{value}</div>
+        <div className="text-xl font-bold tabular-nums text-primary">{value}</div>
       </CardContent>
     </Card>
   );
