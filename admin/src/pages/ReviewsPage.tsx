@@ -41,6 +41,7 @@ interface EvaluationChecklist {
   no_hallucinations: boolean;
   appropriate_scope: boolean;
   language_quality: boolean;
+  publishable_minor_edits: boolean;
 }
 
 interface AdminEvaluation {
@@ -72,10 +73,22 @@ const CHECKLIST_LABELS: Record<keyof EvaluationChecklist, string> = {
   no_hallucinations: "No hallucinations",
   appropriate_scope: "Appropriate scope",
   language_quality: "Language quality",
+  publishable_minor_edits: "Publishable w/ minor edits",
 };
 
+const CHECKLIST_MAX = Object.keys(CHECKLIST_LABELS).length;
+
 function checklistScore(cl: EvaluationChecklist): number {
-  return Object.values(cl).filter(Boolean).length;
+  // Count only known checklist keys so a stale row (missing the newest
+  // publishable_minor_edits key) doesn't inflate the score via undefined.
+  return (Object.keys(CHECKLIST_LABELS) as (keyof EvaluationChecklist)[])
+    .filter((k) => cl?.[k] === true).length;
+}
+
+function failedChecks(cl: EvaluationChecklist): string[] {
+  return (Object.keys(CHECKLIST_LABELS) as (keyof EvaluationChecklist)[])
+    .filter((k) => cl?.[k] !== true)
+    .map((k) => CHECKLIST_LABELS[k]);
 }
 
 function statusVariant(status: string) {
@@ -236,6 +249,7 @@ export default function ReviewsPage() {
                 <TableHead>Query</TableHead>
                 <TableHead>Reviewer</TableHead>
                 <TableHead>Score</TableHead>
+                <TableHead>Failed checks</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Article</TableHead>
                 <TableHead>Date</TableHead>
@@ -244,6 +258,7 @@ export default function ReviewsPage() {
             <TableBody>
               {evals.data?.evaluations.map((ev) => {
                 const score = checklistScore(ev.checklist);
+                const failed = failedChecks(ev.checklist);
                 return (
                   <Fragment key={ev.id}>
                     <TableRow
@@ -263,10 +278,32 @@ export default function ReviewsPage() {
                       <TableCell className="text-sm">{ev.reviewer_username}</TableCell>
                       <TableCell>
                         <span
-                          className={`text-sm font-bold ${score === 6 ? "text-green-600" : score >= 4 ? "text-yellow-600" : "text-red-600"}`}
+                          className={`text-sm font-bold ${
+                            score === CHECKLIST_MAX
+                              ? "text-green-600"
+                              : score >= Math.ceil(CHECKLIST_MAX * 0.66)
+                                ? "text-yellow-600"
+                                : "text-red-600"
+                          }`}
                         >
-                          {score}/6
+                          {score}/{CHECKLIST_MAX}
                         </span>
+                      </TableCell>
+                      <TableCell className="max-w-[18rem]">
+                        {failed.length === 0 ? (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        ) : (
+                          <div className="flex flex-wrap gap-1">
+                            {failed.map((label) => (
+                              <span
+                                key={label}
+                                className="inline-flex items-center rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
+                              >
+                                {label}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Badge variant={statusVariant(ev.review_status)} className="text-xs">
@@ -288,7 +325,7 @@ export default function ReviewsPage() {
                     </TableRow>
                     {expanded.has(ev.id) && (
                       <TableRow key={`${ev.id}-detail`}>
-                        <TableCell colSpan={7} className="bg-secondary/50 p-4 detail-accent">
+                        <TableCell colSpan={8} className="bg-secondary/50 p-4 detail-accent">
                           <div className="space-y-3 text-sm">
                             <div className="grid grid-cols-2 gap-x-8 gap-y-1 sm:grid-cols-3">
                               {(
@@ -330,7 +367,7 @@ export default function ReviewsPage() {
               })}
               {(!evals.data || evals.data.evaluations.length === 0) && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center text-muted-foreground">
                     No evaluations found
                   </TableCell>
                 </TableRow>

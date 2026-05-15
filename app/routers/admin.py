@@ -180,37 +180,53 @@ async def list_reviews(
     )
 
 
-@router.get(
-    "/reviews/export/csv",
-    summary="Export evaluations as CSV",
+_CHECKLIST_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("answers_question", "Answers question"),
+    ("factually_accurate", "Factually accurate"),
+    ("sources_relevant", "Sources relevant"),
+    ("no_hallucinations", "No hallucinations"),
+    ("appropriate_scope", "Appropriate scope"),
+    ("language_quality", "Language quality"),
+    ("publishable_minor_edits", "Publishable w/ minor edits"),
 )
-async def export_evaluations_csv():
-    rows = await db.get_all_evaluations_for_export()
+
+
+def _write_evaluations_csv(rows: list[dict]) -> str:
+    """Render evaluations as CSV. One row per evaluation: under multi-annotator
+    that means a query reviewed by N people will produce N rows."""
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
         "evaluation_id", "query_log_id", "query_text", "reviewer",
-        "answers_question", "factually_accurate", "sources_relevant",
-        "no_hallucinations", "appropriate_scope", "language_quality",
+        *(key for key, _ in _CHECKLIST_COLUMNS),
+        "failed_checks",
         "note", "review_status", "evaluation_date",
     ])
     for r in rows:
         cl = r.get("checklist", {})
         if isinstance(cl, str):
             cl = json.loads(cl)
+        failed = [
+            label for key, label in _CHECKLIST_COLUMNS if cl.get(key) is not True
+        ]
         writer.writerow([
             r["id"], r["query_log_id"], r["query_text"], r["reviewer_username"],
-            cl.get("answers_question", False),
-            cl.get("factually_accurate", False),
-            cl.get("sources_relevant", False),
-            cl.get("no_hallucinations", False),
-            cl.get("appropriate_scope", False),
-            cl.get("language_quality", False),
+            *(cl.get(key, False) for key, _ in _CHECKLIST_COLUMNS),
+            "; ".join(failed),
             r.get("note", ""),
             r["review_status"],
             r["evaluation_date"].isoformat() if hasattr(r["evaluation_date"], "isoformat") else r["evaluation_date"],
         ])
-    content = buf.getvalue()
+    return buf.getvalue()
+
+
+@router.get(
+    "/reviews/export/csv",
+    summary="Export evaluations as CSV",
+)
+async def export_evaluations_csv():
+    rows = await db.get_all_evaluations_for_export()
+    content = _write_evaluations_csv(rows)
     return StreamingResponse(
         iter([content]),
         media_type="text/csv",
@@ -238,31 +254,7 @@ async def export_all_data_zip():
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         # ── evaluations.csv ──
-        csv_buf = io.StringIO()
-        writer = csv.writer(csv_buf)
-        writer.writerow([
-            "evaluation_id", "query_log_id", "query_text", "reviewer",
-            "answers_question", "factually_accurate", "sources_relevant",
-            "no_hallucinations", "appropriate_scope", "language_quality",
-            "note", "review_status", "evaluation_date",
-        ])
-        for r in evals:
-            cl = r.get("checklist", {})
-            if isinstance(cl, str):
-                cl = json.loads(cl)
-            writer.writerow([
-                r["id"], r["query_log_id"], r["query_text"], r["reviewer_username"],
-                cl.get("answers_question", False),
-                cl.get("factually_accurate", False),
-                cl.get("sources_relevant", False),
-                cl.get("no_hallucinations", False),
-                cl.get("appropriate_scope", False),
-                cl.get("language_quality", False),
-                r.get("note", ""),
-                r["review_status"],
-                r["evaluation_date"].isoformat() if hasattr(r["evaluation_date"], "isoformat") else r["evaluation_date"],
-            ])
-        zf.writestr("evaluations.csv", csv_buf.getvalue())
+        zf.writestr("evaluations.csv", _write_evaluations_csv(evals))
 
         # ── reviewed_articles/ ──
         for art in articles:

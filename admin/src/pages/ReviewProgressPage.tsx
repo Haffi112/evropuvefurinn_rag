@@ -41,6 +41,13 @@ interface ReviewStats {
   total_evaluations: number;
   avg_duration_seconds: number | null;
   total_duration_seconds: number;
+  coverage: {
+    zero_evals: number;
+    one_eval: number;
+    multi_eval: number;
+    total_queries: number;
+    avg_annotators_per_reviewed_query: number;
+  };
 }
 
 // Tailwind/CSS colors for the four review statuses — matched to the rest of
@@ -51,6 +58,14 @@ const STATUS_COLORS: Record<string, string> = {
   reviewed: "rgb(14 165 233)",   // sky-500
   approved: "rgb(16 185 129)",   // emerald-500
   excluded: "rgb(100 116 139)",  // slate-500
+};
+
+// Multi-annotator coverage tiers: 0 = no eyes on it yet, 1 = single annotator,
+// 2+ = inter-annotator overlap (suitable for IAA / kappa).
+const COVERAGE_COLORS = {
+  zero: "rgb(245 158 11)",     // amber-500 — uncovered
+  one: "rgb(14 165 233)",      // sky-500 — partial coverage
+  multi: "rgb(16 185 129)",    // emerald-500 — overlap reached
 };
 
 function countByStatus(rows: { status: string; count: number }[], key: string) {
@@ -108,6 +123,7 @@ export default function ReviewProgressPage() {
         <Metric
           label="Total evaluations"
           value={data.total_evaluations.toLocaleString()}
+          hint={`avg ${data.coverage.avg_annotators_per_reviewed_query.toFixed(2)} annotators / reviewed query`}
           accent="primary"
         />
         <Metric
@@ -147,6 +163,66 @@ export default function ReviewProgressPage() {
             { label: "Excluded", value: excluded, color: STATUS_COLORS.excluded },
           ]}
         />
+      </Card>
+
+      {/* Annotator coverage — multi-annotator depth across the corpus */}
+      <Card className="p-5">
+        <div className="mb-4 flex items-baseline justify-between">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">
+            Annotator coverage
+          </h2>
+          <span className="text-xs text-muted-foreground">
+            queries by number of distinct annotators
+          </span>
+        </div>
+        <ProgressSegments
+          segments={[
+            { label: "2+ annotators", value: data.coverage.multi_eval, color: COVERAGE_COLORS.multi },
+            { label: "1 annotator", value: data.coverage.one_eval, color: COVERAGE_COLORS.one },
+            { label: "Not yet annotated", value: data.coverage.zero_evals, color: COVERAGE_COLORS.zero },
+          ]}
+        />
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-md border bg-muted/30 p-3">
+            <div className="text-xs uppercase tracking-wider text-muted-foreground">
+              Not annotated
+            </div>
+            <div className="mt-0.5 text-lg font-bold tabular-nums">
+              {data.coverage.zero_evals.toLocaleString()}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {data.coverage.total_queries > 0
+                ? `${Math.round((100 * data.coverage.zero_evals) / data.coverage.total_queries)}% of corpus`
+                : "—"}
+            </div>
+          </div>
+          <div className="rounded-md border bg-muted/30 p-3">
+            <div className="text-xs uppercase tracking-wider text-muted-foreground">
+              Single annotator
+            </div>
+            <div className="mt-0.5 text-lg font-bold tabular-nums">
+              {data.coverage.one_eval.toLocaleString()}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {data.coverage.total_queries > 0
+                ? `${Math.round((100 * data.coverage.one_eval) / data.coverage.total_queries)}% of corpus`
+                : "—"}
+            </div>
+          </div>
+          <div className="rounded-md border bg-muted/30 p-3">
+            <div className="text-xs uppercase tracking-wider text-muted-foreground">
+              2+ annotators (IAA-ready)
+            </div>
+            <div className="mt-0.5 text-lg font-bold tabular-nums">
+              {data.coverage.multi_eval.toLocaleString()}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {data.coverage.total_queries > 0
+                ? `${Math.round((100 * data.coverage.multi_eval) / data.coverage.total_queries)}% of corpus`
+                : "—"}
+            </div>
+          </div>
+        </div>
       </Card>
 
       {/* Weekly activity */}

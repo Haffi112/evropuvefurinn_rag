@@ -83,6 +83,7 @@ class EvaluationResponse(BaseModel):
     id: int
     query_log_id: int
     reviewer_id: int
+    reviewer_username: str | None = None
     checklist: EvaluationChecklist
     note: str | None
     duration_seconds: int | None = None
@@ -118,7 +119,13 @@ class ReviewQueryListItem(BaseModel):
     review_status: str
     cached: bool
     created_at: datetime
+    # Backward-compat: comma-joined usernames of all reviewers who evaluated.
     reviewer_username: str | None
+    # Multi-annotator additions:
+    reviewer_usernames: list[str] = []
+    evaluation_count: int = 0
+    # Whether the calling reviewer has already evaluated this query.
+    i_evaluated: bool = False
     mode: str = "rag"  # 'rag' | 'websearch'
 
 
@@ -143,5 +150,8 @@ class ReviewQueryDetail(BaseModel):
     created_at: datetime
     review_status: str
     mode: str = "rag"  # 'rag' | 'websearch'
+    # The calling reviewer's own evaluation (if any).
     evaluation: EvaluationResponse | None = None
+    # All evaluations for this query, across reviewers — supports IAA/coverage UIs.
+    all_evaluations: list[EvaluationResponse] = []
     latest_article: ReviewedArticleResponse | None = None

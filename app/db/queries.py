@@ -383,7 +383,16 @@ async def list_query_logs_for_review(
     per_page: int,
     review_status: str | None = None,
     search: str | None = None,
+    viewer_id: int | None = None,
 ) -> tuple[list[dict], int]:
+    """List queries for the reviewer queue.
+
+    Aggregates multi-annotator evaluation data per query:
+      - evaluation_count: how many distinct reviewers have evaluated
+      - reviewer_usernames: list of those usernames
+      - reviewer_username:  comma-joined string (backward compat)
+      - i_evaluated:        whether the calling reviewer (viewer_id) has evaluated
+    """
     pool = get_pool()
     offset = (page - 1) * per_page
 
@@ -407,6 +416,11 @@ async def list_query_logs_for_review(
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
+    # $idx → viewer_id, $idx+1 → per_page, $idx+2 → offset
+    viewer_param_idx = idx
+    limit_idx = idx + 1
+    offset_idx = idx + 2
+
     async with pool.acquire() as conn:
         total = await conn.fetchval(
             f"SELECT count(*) FROM query_log ql {where}", *params
@@ -415,18 +429,39 @@ async def list_query_logs_for_review(
             f"""
             SELECT ql.id, ql.query_text, ql.model_used, ql.review_status,
                    ql.cached, ql.created_at, ql.mode,
-                   ru.username AS reviewer_username,
-                   su.username AS submitted_by
+                   su.username AS submitted_by,
+                   COALESCE(agg.evaluation_count, 0) AS evaluation_count,
+                   COALESCE(agg.reviewer_usernames, '{{}}'::text[]) AS reviewer_usernames,
+                   EXISTS (
+                       SELECT 1 FROM review_evaluations re2
+                       WHERE re2.query_log_id = ql.id
+                         AND ${viewer_param_idx}::int IS NOT NULL
+                         AND re2.reviewer_id = ${viewer_param_idx}::int
+                   ) AS i_evaluated
             FROM query_log ql
-            LEFT JOIN review_evaluations re ON re.query_log_id = ql.id
-            LEFT JOIN review_users ru ON ru.id = re.reviewer_id
             LEFT JOIN review_users su ON su.id = ql.reviewer_id
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) AS evaluation_count,
+                       array_agg(ru.username ORDER BY re.created_at) AS reviewer_usernames
+                FROM review_evaluations re
+                JOIN review_users ru ON ru.id = re.reviewer_id
+                WHERE re.query_log_id = ql.id
+            ) agg ON TRUE
             {where}
             ORDER BY ql.created_at DESC
-            LIMIT ${idx} OFFSET ${idx + 1}
+            LIMIT ${limit_idx} OFFSET ${offset_idx}
             """,
-            *params, per_page, offset,
+            *params, viewer_id, per_page, offset,
         )
+        rows = [
+            {
+                **dict(r),
+                # Backward-compatible string view of the aggregated list
+                "reviewer_username": ", ".join(r["reviewer_usernames"])
+                    if r["reviewer_usernames"] else None,
+            }
+            for r in rows
+        ]
         return [dict(r) for r in rows], total
 
 
@@ -446,14 +481,27 @@ async def get_query_log_detail(query_log_id: int) -> dict | None:
 
 
 async def get_next_unreviewed_query(
-    exclude_id: int | None, batch_user_id: int | None
+    exclude_id: int | None,
+    batch_user_id: int | None,
+    reviewer_id: int | None = None,
 ) -> int | None:
-    """Pick a random query_log row that has no review_evaluations row and is
-    not review_status='excluded'. Prefers rows attributed to the batch user
-    (ql.reviewer_id = batch_user_id) when such candidates exist; falls back to
-    any unreviewed row otherwise. Returns the id, or None if nothing available.
+    """Pick the next query for this reviewer, random within priority tiers.
 
-    NOTE: We coerce the preference expression via `IS TRUE` because comparing
+    With multi-annotator support, "unreviewed" is per-reviewer: a query
+    already evaluated by reviewer A is still available to reviewer B.
+    Each reviewer therefore walks the corpus in their own random order.
+
+    Priority tiers (highest first):
+      1. Queries with zero evaluations from anyone — drives coverage first
+         so we never double-up before every article has been seen.
+      2. Queries attributed to the batch user — keeps the seeded review
+         corpus ahead of ad-hoc playground queries.
+      3. Random tiebreaker within each tier.
+
+    If reviewer_id is None (legacy callers), falls back to the original
+    "no evaluations at all" filter for backward compatibility.
+
+    NOTE: We coerce preference expressions via `IS TRUE` because comparing
     against a NULL reviewer_id yields NULL, and Postgres's default
     `ORDER BY ... DESC` puts NULLs FIRST — which would bias the picker toward
     playground queries (NULL reviewer_id) over actual batch items. Using
@@ -464,14 +512,29 @@ async def get_next_unreviewed_query(
             """
             SELECT ql.id
             FROM query_log ql
-            LEFT JOIN review_evaluations re ON re.query_log_id = ql.id
-            WHERE re.id IS NULL
-              AND ql.review_status != 'excluded'
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) AS n_evals
+                FROM review_evaluations re
+                WHERE re.query_log_id = ql.id
+            ) agg ON TRUE
+            WHERE ql.review_status != 'excluded'
               AND ($1::bigint IS NULL OR ql.id != $1)
-            ORDER BY (ql.reviewer_id = $2) IS TRUE DESC, random()
+              AND (
+                  -- Legacy: caller didn't pass reviewer_id → original semantics
+                  ($3::int IS NULL AND agg.n_evals = 0)
+                  OR
+                  -- Per-reviewer: this reviewer has no evaluation row yet
+                  ($3::int IS NOT NULL AND NOT EXISTS (
+                      SELECT 1 FROM review_evaluations re
+                      WHERE re.query_log_id = ql.id AND re.reviewer_id = $3
+                  ))
+              )
+            ORDER BY (agg.n_evals = 0) DESC,
+                     (ql.reviewer_id = $2) IS TRUE DESC,
+                     random()
             LIMIT 1
             """,
-            exclude_id, batch_user_id,
+            exclude_id, batch_user_id, reviewer_id,
         )
         return row["id"] if row else None
 
@@ -996,6 +1059,29 @@ async def get_admin_review_stats() -> dict:
             """
         )
 
+        # Multi-annotator coverage: how many distinct queries have been
+        # evaluated by N reviewers? Captures coverage progress (queries
+        # with ≥1 annotator) and inter-annotator depth (queries with ≥2).
+        coverage = await conn.fetchrow(
+            """
+            WITH per_query AS (
+                SELECT ql.id,
+                       COUNT(re.id) AS n_evals
+                FROM query_log ql
+                LEFT JOIN review_evaluations re ON re.query_log_id = ql.id
+                WHERE ql.review_status != 'excluded'
+                GROUP BY ql.id
+            )
+            SELECT COUNT(*) FILTER (WHERE n_evals = 0) AS zero_evals,
+                   COUNT(*) FILTER (WHERE n_evals = 1) AS one_eval,
+                   COUNT(*) FILTER (WHERE n_evals >= 2) AS multi_eval,
+                   COUNT(*) AS total_queries,
+                   COALESCE(AVG(n_evals) FILTER (WHERE n_evals > 0), 0)::float
+                       AS avg_annotators_per_reviewed_query
+            FROM per_query
+            """
+        )
+
     return {
         "status_counts": [{"status": r["review_status"], "count": r["count"]} for r in status_rows],
         "weekly_activity": [{"day": r["day"].isoformat(), "count": r["count"]} for r in weekly_rows],
@@ -1023,6 +1109,13 @@ async def get_admin_review_stats() -> dict:
         "total_evaluations": totals["total_evaluations"],
         "avg_duration_seconds": float(totals["avg_duration"]) if totals["avg_duration"] is not None else None,
         "total_duration_seconds": int(totals["total_duration"]) if totals["total_duration"] is not None else 0,
+        "coverage": {
+            "zero_evals": coverage["zero_evals"],
+            "one_eval": coverage["one_eval"],
+            "multi_eval": coverage["multi_eval"],
+            "total_queries": coverage["total_queries"],
+            "avg_annotators_per_reviewed_query": float(coverage["avg_annotators_per_reviewed_query"]),
+        },
     }
 
 
@@ -1030,14 +1123,18 @@ async def upsert_evaluation(
     query_log_id: int, reviewer_id: int, checklist: dict, note: str | None,
     duration_seconds: int | None = None,
 ) -> dict:
+    """Insert or update a reviewer's evaluation of a query.
+
+    Conflict key is (query_log_id, reviewer_id): one evaluation per reviewer
+    per query, but multiple reviewers may each have their own row.
+    """
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
             INSERT INTO review_evaluations (query_log_id, reviewer_id, checklist, note, duration_seconds)
             VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (query_log_id) DO UPDATE SET
-                reviewer_id = EXCLUDED.reviewer_id,
+            ON CONFLICT (query_log_id, reviewer_id) DO UPDATE SET
                 checklist = EXCLUDED.checklist,
                 note = EXCLUDED.note,
                 duration_seconds = COALESCE(EXCLUDED.duration_seconds, review_evaluations.duration_seconds),
@@ -1049,12 +1146,18 @@ async def upsert_evaluation(
         return dict(row)
 
 
-async def get_evaluation(query_log_id: int) -> dict | None:
+async def get_evaluation_for_reviewer(
+    query_log_id: int, reviewer_id: int,
+) -> dict | None:
+    """Return a single reviewer's evaluation of a query, or None."""
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT * FROM review_evaluations WHERE query_log_id = $1",
-            query_log_id,
+            """
+            SELECT * FROM review_evaluations
+            WHERE query_log_id = $1 AND reviewer_id = $2
+            """,
+            query_log_id, reviewer_id,
         )
         if not row:
             return None
@@ -1071,6 +1174,88 @@ async def update_review_status(query_log_id: int, status: str) -> None:
             "UPDATE query_log SET review_status = $1 WHERE id = $2",
             status, query_log_id,
         )
+
+
+async def get_all_evaluations_for_query(query_log_id: int) -> list[dict]:
+    """Return every reviewer's evaluation of a query, with reviewer username."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT re.*, ru.username AS reviewer_username
+            FROM review_evaluations re
+            JOIN review_users ru ON ru.id = re.reviewer_id
+            WHERE re.query_log_id = $1
+            ORDER BY re.created_at ASC
+            """,
+            query_log_id,
+        )
+        out: list[dict] = []
+        for row in rows:
+            d = dict(row)
+            if isinstance(d.get("checklist"), str):
+                d["checklist"] = json.loads(d["checklist"])
+            out.append(d)
+        return out
+
+
+def derive_review_status(
+    current_status: str, checklists: list[dict] | None,
+) -> str:
+    """Pure rule deriving review_status from current status and evaluations.
+
+    Exposed as a module-level function so it can be unit-tested without a DB.
+
+    Rule (multi-annotator):
+      - current_status == 'excluded' → stay 'excluded' (terminal)
+      - No checklists                → 'pending'
+      - At least one checklist, but
+        not all are all-true          → 'reviewed'
+      - All checklists all-true      → 'approved'
+    """
+    if current_status == "excluded":
+        return "excluded"
+    if not checklists:
+        return "pending"
+
+    def all_true(cl: dict) -> bool:
+        return bool(cl) and all(v is True for v in cl.values())
+
+    return "approved" if all(all_true(c) for c in checklists) else "reviewed"
+
+
+async def recompute_review_status(query_log_id: int) -> str:
+    """Re-derive a query's review_status from all stored evaluations.
+
+    Returns the new status. Leaves rows with status='excluded' untouched.
+    See derive_review_status() for the decision rule.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            current = await conn.fetchval(
+                "SELECT review_status FROM query_log WHERE id = $1",
+                query_log_id,
+            )
+            if current == "excluded":
+                return "excluded"
+
+            rows = await conn.fetch(
+                "SELECT checklist FROM review_evaluations WHERE query_log_id = $1",
+                query_log_id,
+            )
+            parsed = [
+                json.loads(r["checklist"]) if isinstance(r["checklist"], str) else r["checklist"]
+                for r in rows
+            ]
+            new_status = derive_review_status(current, parsed)
+
+            if new_status != current:
+                await conn.execute(
+                    "UPDATE query_log SET review_status = $1 WHERE id = $2",
+                    new_status, query_log_id,
+                )
+            return new_status
 
 
 async def insert_reviewed_article(

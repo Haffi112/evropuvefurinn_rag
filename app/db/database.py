@@ -75,9 +75,12 @@ CREATE TABLE IF NOT EXISTS review_users (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- One row per (query_log_id, reviewer_id) — multiple annotators can evaluate
+-- the same response. See the migration block below for the live-DB drop of the
+-- legacy single-annotator UNIQUE(query_log_id) constraint.
 CREATE TABLE IF NOT EXISTS review_evaluations (
     id               BIGSERIAL PRIMARY KEY,
-    query_log_id     BIGINT NOT NULL REFERENCES query_log(id) UNIQUE,
+    query_log_id     BIGINT NOT NULL REFERENCES query_log(id),
     reviewer_id      INT NOT NULL REFERENCES review_users(id),
     checklist        JSONB NOT NULL,
     note             TEXT,
@@ -85,6 +88,10 @@ CREATE TABLE IF NOT EXISTS review_evaluations (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_review_evaluations_query_reviewer
+    ON review_evaluations (query_log_id, reviewer_id);
+CREATE INDEX IF NOT EXISTS idx_review_evaluations_query_log_id
+    ON review_evaluations (query_log_id);
 
 CREATE TABLE IF NOT EXISTS reviewed_articles (
     id              BIGSERIAL PRIMARY KEY,
@@ -228,6 +235,29 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_flagged_references_unique_url_open
     WHERE url IS NOT NULL AND resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_flagged_references_url
     ON flagged_references (url) WHERE url IS NOT NULL;
+
+-- Multi-annotator: drop the legacy single-annotator UNIQUE(query_log_id)
+-- constraint on review_evaluations and replace it with a composite UNIQUE
+-- INDEX on (query_log_id, reviewer_id). Strictly looser than the original
+-- constraint, so every existing row satisfies it — no data is touched.
+DO $$
+DECLARE
+    cname text;
+BEGIN
+    SELECT conname INTO cname
+    FROM pg_constraint
+    WHERE conrelid = 'review_evaluations'::regclass
+      AND contype = 'u'
+      AND pg_get_constraintdef(oid) = 'UNIQUE (query_log_id)';
+    IF cname IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE review_evaluations DROP CONSTRAINT %I', cname);
+    END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_review_evaluations_query_reviewer
+    ON review_evaluations (query_log_id, reviewer_id);
+CREATE INDEX IF NOT EXISTS idx_review_evaluations_query_log_id
+    ON review_evaluations (query_log_id);
 """
 
 

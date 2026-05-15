@@ -70,6 +70,7 @@ async def list_queries(
     rows, total = await db.list_query_logs_for_review(
         page=page, per_page=per_page,
         review_status=review_status, search=search,
+        viewer_id=reviewer.id,
     )
     total_pages = (total + per_page - 1) // per_page
     return ReviewQueryListResponse(
@@ -80,16 +81,21 @@ async def list_queries(
 
 @router.get(
     "/queries/next",
-    summary="Next unreviewed query",
-    description="Returns the id of a random unreviewed query_log row, preferring "
-    "queries authored by the batch user. Returns 404 if no unreviewed queries exist.",
+    summary="Next query for this reviewer",
+    description="Returns the id of a query this reviewer has not yet evaluated, "
+    "drawn in a random order. Queries with zero evaluations from anyone are "
+    "prioritized over queries already evaluated by other reviewers, so corpus "
+    "coverage builds up before annotators double up on the same items. "
+    "Returns 404 if this reviewer has evaluated every available query.",
 )
 async def get_next_unreviewed(
     reviewer: ReviewUser = Depends(verify_review_token),
     exclude_id: int | None = Query(default=None),
 ):
     batch_user_id = await db.get_batch_user_id()
-    next_id = await db.get_next_unreviewed_query(exclude_id, batch_user_id)
+    next_id = await db.get_next_unreviewed_query(
+        exclude_id, batch_user_id, reviewer_id=reviewer.id,
+    )
     if next_id is None:
         raise HTTPException(status_code=404, detail="No unreviewed queries")
     return {"id": next_id}
@@ -186,12 +192,14 @@ async def get_query_detail(
     if isinstance(refs, str):
         row["references"] = json.loads(refs)
 
-    evaluation = await db.get_evaluation(query_id)
+    evaluation = await db.get_evaluation_for_reviewer(query_id, reviewer.id)
+    all_evaluations = await db.get_all_evaluations_for_query(query_id)
     latest_article = await db.get_latest_reviewed_article(query_id)
 
     return ReviewQueryDetail(
         **row,
         evaluation=evaluation,
+        all_evaluations=all_evaluations,
         latest_article=latest_article,
     )
 
@@ -219,10 +227,11 @@ async def evaluate_query(
         duration_seconds=body.duration_seconds,
     )
 
-    # Auto-set review_status
-    all_checked = all(checklist_dict.values())
-    status = "approved" if all_checked else "reviewed"
-    await db.update_review_status(query_id, status)
+    # Re-derive review_status from *all* evaluations (multi-annotator):
+    # approved iff every existing evaluation is all-true; else reviewed if any
+    # evaluation exists; else pending. A single dissenting reviewer downgrades
+    # approved → reviewed on their submission, which is the desired behavior.
+    await db.recompute_review_status(query_id)
 
     if isinstance(row.get("checklist"), str):
         row["checklist"] = json.loads(row["checklist"])
