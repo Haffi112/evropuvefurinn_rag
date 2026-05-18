@@ -14,7 +14,7 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { apiFetch, getApiKey } from "@/lib/api";
+import { ApiError, apiFetch, getApiKey } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -103,19 +103,22 @@ function statusVariant(status: string) {
   }
 }
 
-function downloadFile(url: string, filename: string) {
+async function downloadFile(url: string, filename: string) {
   const key = getApiKey();
-  fetch(url, {
-    headers: key ? { "X-API-Key": key } : {},
-  })
-    .then((res) => res.blob())
-    .then((blob) => {
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(a.href);
-    });
+  const res = await fetch(url, {
+    headers: key ? { Authorization: `Bearer ${key}` } : {},
+  });
+  if (!res.ok) {
+    // Surface the failure rather than saving a 401 JSON body as a fake export.
+    const text = await res.text();
+    throw new ApiError(res.status, text);
+  }
+  const blob = await res.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 export default function ReviewsPage() {
