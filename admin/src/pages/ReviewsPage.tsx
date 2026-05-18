@@ -9,6 +9,7 @@ import {
   Database,
   Download,
   FileArchive,
+  FileCode2,
   Minus,
   Search,
   X,
@@ -170,6 +171,20 @@ export default function ReviewsPage() {
           >
             <FileArchive className="mr-1.5 h-3.5 w-3.5" />
             Export Articles
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              downloadFile(
+                "/api/v1/admin/reviews/export/visindavefur",
+                "reviewed_articles_visindavefur.zip",
+              )
+            }
+            title="HTML+template flavor used by Vísindavefur — one .html file per article"
+          >
+            <FileCode2 className="mr-1.5 h-3.5 w-3.5" />
+            Export VV
           </Button>
           <Button
             variant="outline"
@@ -358,6 +373,23 @@ export default function ReviewsPage() {
                                 {ev.note}
                               </p>
                             )}
+                            <div className="flex flex-wrap items-center gap-2 pt-1">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  downloadFile(
+                                    `/api/v1/admin/reviews/${ev.query_log_id}/export/visindavefur`,
+                                    `${ev.query_log_id}_visindavefur.html`,
+                                  );
+                                }}
+                                title="Download this article as a Vísindavefur-format HTML snippet (uses the reviewed_articles edit when one exists, otherwise the raw LLM response)"
+                              >
+                                <FileCode2 className="mr-1.5 h-3.5 w-3.5" />
+                                Download VV format
+                              </Button>
+                            </div>
                           </div>
                         </TableCell>
                       </TableRow>

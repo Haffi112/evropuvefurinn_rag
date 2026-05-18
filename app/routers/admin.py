@@ -29,6 +29,7 @@ from app.models.review_schemas import (
     ReviewUserResponse,
 )
 from app.services.rag_service import RAGService
+from app.services.visindavefur_export import to_vv_html
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +241,22 @@ def _slugify(text: str) -> str:
     return re.sub(r"[\s_]+", "-", text)[:60]
 
 
+def _slugify_ascii(text: str) -> str:
+    """ASCII-only slug for HTTP Content-Disposition headers, which must be
+    latin-1-safe. Folds Icelandic letters to their nearest ASCII equivalent."""
+    import unicodedata
+
+    # `ð`/`þ` have no ASCII decomposition, so map them BEFORE NFKD strips
+    # them silently.
+    pre = (
+        text.replace("ð", "d").replace("Ð", "D")
+        .replace("þ", "th").replace("Þ", "Th")
+    )
+    folded = unicodedata.normalize("NFKD", pre)
+    folded = folded.encode("ascii", "ignore").decode("ascii")
+    return _slugify(folded)
+
+
 @router.get(
     "/reviews/export/all",
     summary="Export all data as ZIP (evaluations, articles, query log, metadata)",
@@ -372,6 +389,73 @@ async def export_articles_zip():
         buf,
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="reviewed_articles.zip"'},
+    )
+
+
+def _coerce_references(refs) -> list[dict]:
+    """`query_log.references` may come back as a JSON string or as a list,
+    depending on whether asyncpg's JSONB codec decoded it. Normalize."""
+    if refs is None:
+        return []
+    if isinstance(refs, str):
+        try:
+            refs = json.loads(refs)
+        except json.JSONDecodeError:
+            return []
+    return refs if isinstance(refs, list) else []
+
+
+@router.get(
+    "/reviews/{query_log_id}/export/visindavefur",
+    summary="Export a single reviewed article in Vísindavefur publish format",
+    description="Returns the article body as text/plain in the HTML+template "
+    "flavor used by Vísindavefur (<strong>, <b>, {{footnote|...}}, "
+    "{{footnote_list|}}, and a Heimildir block). Prefers the editor's "
+    "reviewed_articles.edited_response when one exists; otherwise falls back "
+    "to the raw LLM response.",
+)
+async def export_query_visindavefur(query_log_id: int):
+    ql = await db.get_query_log_detail(query_log_id)
+    if not ql:
+        raise HTTPException(status_code=404, detail="Query log not found")
+
+    reviewed = await db.get_latest_reviewed_article(query_log_id)
+    body = (reviewed["edited_response"] if reviewed else ql.get("response_text")) or ""
+    refs = _coerce_references(ql.get("references"))
+
+    rendered = to_vv_html(body, refs)
+    filename_slug = _slugify_ascii(
+        (reviewed["title"] if reviewed else ql.get("query_text", "")) or "svar"
+    )
+    filename = f"{query_log_id}_{filename_slug or 'svar'}.html"
+    return StreamingResponse(
+        io.BytesIO(rendered.encode("utf-8")),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get(
+    "/reviews/export/visindavefur",
+    summary="Bulk-export reviewed articles in Vísindavefur publish format (ZIP)",
+)
+async def export_articles_visindavefur_zip():
+    articles = await db.get_all_reviewed_articles_latest()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for art in articles:
+            refs = _coerce_references(art.get("references"))
+            rendered = to_vv_html(art["edited_response"] or "", refs)
+            slug = _slugify(art["title"])
+            filename = f"{art['query_log_id']}_{slug}.html"
+            zf.writestr(filename, rendered)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="reviewed_articles_visindavefur.zip"'
+        },
     )
 
 
