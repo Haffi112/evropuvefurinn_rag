@@ -104,6 +104,31 @@ def test_multi_citation_emits_two_footnotes():
     assert "{{footnote|text=Second — https://b.example}}" in out
 
 
+def test_citation_with_leading_space_attaches_tightly():
+    """LLM sometimes emits `word [[1]](url).` with a stray space before
+    the citation. Vísindavefur's style requires no whitespace anywhere
+    between the cited word, the period, and the footnote — so the leading
+    space must be dropped, not preserved as `word .{{footnote}}`.
+    """
+    md = "samrýmist þeim réttindum [[1]](https://evropuvefur.is/eftadomur)."
+    out = to_vv_html(md, [REF_EU])
+    assert (
+        "samrýmist þeim réttindum.{{footnote|text=EFTA-dómstóllinn — "
+        "https://evropuvefur.is/eftadomur}}"
+    ) in out
+    # No space anywhere in the cluster.
+    assert "réttindum ." not in out
+    assert "réttindum. {" not in out
+
+
+def test_citation_with_leading_space_no_period():
+    """Same rule when the citation has no trailing period: it still
+    attaches tightly to the preceding word."""
+    md = "Sjá [[1]](https://evropuvefur.is/eftadomur) til frekari skýringa."
+    out = to_vv_html(md, [REF_EU])
+    assert "Sjá{{footnote|text=EFTA-dómstóllinn" in out
+
+
 def test_citation_with_unknown_number_falls_back_to_url():
     md = "Vísun[[7]](https://example.com/x)."
     out = to_vv_html(md, [REF_EU])

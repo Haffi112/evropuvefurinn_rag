@@ -19,7 +19,12 @@ import re
 from html import escape
 
 
-CITATION_RUN_RE = re.compile(r"((?:\[\[\d+\]\]\([^)]+\))+)(\.?)")
+# Leading `[ \t]*` consumes any stray horizontal whitespace the LLM may have
+# inserted before the citation marker (e.g. "word [[1]](url).") so the
+# footnote attaches tightly to the preceding word — Vísindavefur's style
+# requires no whitespace between the cited word, the period, and the
+# footnote: `word.{{footnote|...}}`. Newlines are preserved.
+CITATION_RUN_RE = re.compile(r"[ \t]*((?:\[\[\d+\]\]\([^)]+\))+)(\.?)")
 INNER_CITATION_RE = re.compile(r"\[\[(\d+)\]\]\(([^)]+)\)")
 HEIMILDIR_HEADER_RE = re.compile(
     r"^\s*##+\s*(Heimildir|References)\s*$", re.IGNORECASE
