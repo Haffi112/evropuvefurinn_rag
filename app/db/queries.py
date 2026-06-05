@@ -1426,7 +1426,7 @@ async def get_all_evaluations_for_export() -> list[dict]:
             SELECT re.id, re.query_log_id, ql.query_text,
                    ru.username AS reviewer_username,
                    re.checklist, re.note,
-                   ql.review_status,
+                   ql.review_status, ql.mode,
                    re.created_at AS evaluation_date
             FROM review_evaluations re
             JOIN query_log ql ON ql.id = re.query_log_id
@@ -1448,7 +1448,7 @@ async def get_all_query_logs_for_export() -> list[dict]:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, query_text, response_text, model_used, "references",
+            SELECT id, query_text, response_text, model_used, mode, "references",
                    scope_declined, cached, latency_ms, ip_address, review_status, created_at
             FROM query_log
             ORDER BY created_at DESC

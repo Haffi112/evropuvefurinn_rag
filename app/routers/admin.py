@@ -198,7 +198,7 @@ def _write_evaluations_csv(rows: list[dict]) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
-        "evaluation_id", "query_log_id", "query_text", "reviewer",
+        "evaluation_id", "query_log_id", "query_text", "reviewer", "mode",
         *(key for key, _ in _CHECKLIST_COLUMNS),
         "failed_checks",
         "note", "review_status", "evaluation_date",
@@ -212,6 +212,7 @@ def _write_evaluations_csv(rows: list[dict]) -> str:
         ]
         writer.writerow([
             r["id"], r["query_log_id"], r["query_text"], r["reviewer_username"],
+            r.get("mode", ""),
             *(cl.get(key, False) for key, _ in _CHECKLIST_COLUMNS),
             "; ".join(failed),
             r.get("note", ""),
@@ -356,7 +357,7 @@ async def export_all_data_zip():
         ql_buf = io.StringIO()
         ql_writer = csv.writer(ql_buf)
         ql_writer.writerow([
-            "id", "query_text", "response_text", "model_used", "references_count",
+            "id", "query_text", "response_text", "model_used", "mode", "references_count",
             "scope_declined", "cached", "latency_ms", "review_status", "created_at",
         ])
         for ql in query_logs:
@@ -367,6 +368,7 @@ async def export_all_data_zip():
             ql_writer.writerow([
                 ql["id"], ql["query_text"], ql.get("response_text", ""),
                 ql.get("model_used", ""),
+                ql.get("mode", ""),
                 refs_count,
                 ql.get("scope_declined", False),
                 ql.get("cached", False),
