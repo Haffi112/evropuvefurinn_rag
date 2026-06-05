@@ -1481,6 +1481,47 @@ async def get_all_reviewed_articles_latest() -> list[dict]:
         return result
 
 
+async def get_all_flagged_references_for_export() -> list[dict]:
+    """Flat export of every source flag (open AND resolved), one row per flag.
+
+    Each flag targets either an article (RAG/local source) or a web URL. We
+    LEFT JOIN articles so article-based flags carry their title/source_url, and
+    expose the flagging reviewer's comment (`reason`), the flag_type
+    ('outdated' / 'irrelevant' / 'untrustworthy'), the originating query, and
+    full resolution metadata so the export is a complete audit trail."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                f.id                                          AS flag_id,
+                CASE WHEN f.article_id IS NOT NULL
+                     THEN 'article' ELSE 'url' END            AS source_kind,
+                f.flag_type                                   AS flag_type,
+                f.reason                                      AS comment,
+                f.article_id                                  AS article_id,
+                a.title                                       AS article_title,
+                a.source_url                                  AS article_source_url,
+                f.url                                         AS web_url,
+                f.query_log_id                                AS query_log_id,
+                ql.query_text                                 AS query_text,
+                u.username                                    AS flagged_by,
+                f.created_at                                  AS flagged_at,
+                CASE WHEN f.resolved_at IS NULL
+                     THEN 'open' ELSE 'resolved' END          AS status,
+                f.resolved_at                                 AS resolved_at,
+                ru.username                                   AS resolved_by
+            FROM flagged_references f
+            JOIN review_users u ON u.id = f.reviewer_id
+            LEFT JOIN review_users ru ON ru.id = f.resolved_by
+            LEFT JOIN articles a ON a.id = f.article_id
+            LEFT JOIN query_log ql ON ql.id = f.query_log_id
+            ORDER BY f.created_at DESC
+            """
+        )
+        return [dict(r) for r in rows]
+
+
 # ── Batch queue ──────────────────────────────────────────────
 
 async def get_batch_user_id() -> int | None:

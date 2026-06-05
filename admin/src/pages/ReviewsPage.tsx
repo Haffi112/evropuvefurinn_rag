@@ -198,6 +198,7 @@ export default function ReviewsPage() {
                 "evropuvefur_all_data.zip",
               )
             }
+            title="ZIP: evaluations.csv, flagged_references.csv (source flags + comments + reason), reviewed_articles/, query_log.csv, metadata.json"
           >
             <Database className="mr-1.5 h-3.5 w-3.5" />
             Export All Data

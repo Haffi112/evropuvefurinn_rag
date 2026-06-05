@@ -221,6 +221,47 @@ def _write_evaluations_csv(rows: list[dict]) -> str:
     return buf.getvalue()
 
 
+def _write_flags_csv(rows: list[dict]) -> str:
+    """Render source flags as CSV. One row per flag (open and resolved), each
+    carrying its flag_type, the reviewer's free-text comment, the flagged
+    source (article title + URL, or the raw web URL), the originating query,
+    and resolution metadata."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "flag_id", "source_kind", "flag_type", "comment",
+        "source_title", "source_url",
+        "query_log_id", "query_text",
+        "flagged_by", "flagged_at",
+        "status", "resolved_by", "resolved_at",
+    ])
+    for r in rows:
+        if r.get("source_kind") == "article":
+            source_title = r.get("article_title", "")
+            source_url = r.get("article_source_url", "")
+        else:
+            source_title = ""
+            source_url = r.get("web_url", "")
+        flagged_at = r.get("flagged_at")
+        resolved_at = r.get("resolved_at")
+        writer.writerow([
+            r.get("flag_id", ""),
+            r.get("source_kind", ""),
+            r.get("flag_type", ""),
+            r.get("comment", "") or "",
+            source_title or "",
+            source_url or "",
+            r.get("query_log_id", "") or "",
+            r.get("query_text", "") or "",
+            r.get("flagged_by", ""),
+            flagged_at.isoformat() if hasattr(flagged_at, "isoformat") else (flagged_at or ""),
+            r.get("status", ""),
+            r.get("resolved_by", "") or "",
+            resolved_at.isoformat() if hasattr(resolved_at, "isoformat") else (resolved_at or ""),
+        ])
+    return buf.getvalue()
+
+
 @router.get(
     "/reviews/export/csv",
     summary="Export evaluations as CSV",
@@ -259,19 +300,25 @@ def _slugify_ascii(text: str) -> str:
 
 @router.get(
     "/reviews/export/all",
-    summary="Export all data as ZIP (evaluations, articles, query log, metadata)",
+    summary="Export all data as ZIP (evaluations, flagged references, articles, query log, metadata)",
 )
 async def export_all_data_zip():
-    evals, articles, query_logs = (
+    evals, articles, query_logs, flags = (
         await db.get_all_evaluations_for_export(),
         await db.get_all_reviewed_articles_latest(),
         await db.get_all_query_logs_for_export(),
+        await db.get_all_flagged_references_for_export(),
     )
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         # ── evaluations.csv ──
         zf.writestr("evaluations.csv", _write_evaluations_csv(evals))
+
+        # ── flagged_references.csv ──
+        # Reviewer comments on sources: which reference was flagged, the
+        # comment, and why (outdated / irrelevant / untrustworthy).
+        zf.writestr("flagged_references.csv", _write_flags_csv(flags))
 
         # ── reviewed_articles/ ──
         for art in articles:
@@ -335,6 +382,7 @@ async def export_all_data_zip():
             "total_queries": len(query_logs),
             "total_evaluations": len(evals),
             "total_articles": len(articles),
+            "total_flags": len(flags),
         }
         zf.writestr("metadata.json", json.dumps(metadata, indent=2))
 
