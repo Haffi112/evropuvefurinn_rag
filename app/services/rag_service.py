@@ -11,6 +11,7 @@ from app.models.schemas import QueryResponse, Reference
 from app.services import settings_service
 from app.services.llm_service import LLMService
 from app.services.embedding_service import EmbeddingService
+from app.services.visindavefur_export import to_vv_html
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,42 @@ class RAGService:
         score_threshold: float | None = None, include_thinking: bool = False,
         web_search: bool = False, reviewer_id: int | None = None,
         model_override: str | None = None, skip_cache: bool = False,
+        output_format: str = "markdown",
+    ) -> QueryResponse:
+        """Answer a query as a single JSON response.
+
+        ``output_format`` controls the rendering of the ``answer`` field:
+        ``"markdown"`` (the internal default, used by the review playground and
+        batch worker) returns the raw Markdown the model emits; ``"vv"`` (the
+        public-API default, set by the ``/api/v1/query`` router) converts it to
+        the Vísindavefur publish format so callers get the same output as the
+        review/export mechanism. Markdown stays canonical everywhere else —
+        cache, query_log, and review drafts are unaffected — so VV is purely a
+        presentation layer applied on the way out.
+        """
+        response = await self._process_query_json(
+            query, top_k, language,
+            ip_address=ip_address, start_time=start_time,
+            score_threshold=score_threshold, include_thinking=include_thinking,
+            web_search=web_search, reviewer_id=reviewer_id,
+            model_override=model_override, skip_cache=skip_cache,
+        )
+        # Web-search answers carry their sources inline with an empty structured
+        # references list, so VV's reference-reconstruction would drop them —
+        # leave those as Markdown.
+        if output_format == "vv" and not web_search:
+            refs = [r.model_dump() for r in response.references]
+            response = response.model_copy(
+                update={"answer": to_vv_html(response.answer, refs)}
+            )
+        return response
+
+    async def _process_query_json(
+        self, query: str, top_k: int, language: str,
+        ip_address: str | None = None, start_time: float | None = None,
+        score_threshold: float | None = None, include_thinking: bool = False,
+        web_search: bool = False, reviewer_id: int | None = None,
+        model_override: str | None = None, skip_cache: bool = False,
     ) -> QueryResponse:
         query_id = f"q_{uuid.uuid4().hex[:12]}"
         qhash = _query_hash(query, model_override or "auto")
@@ -312,10 +349,27 @@ class RAGService:
         score_threshold: float | None = None, include_thinking: bool = False,
         web_search: bool = False, reviewer_id: int | None = None,
         model_override: str | None = None, skip_cache: bool = False,
+        output_format: str = "markdown",
     ):
-        """Yields dicts with 'event' and 'data' keys for sse-starlette."""
+        """Yields dicts with 'event' and 'data' keys for sse-starlette.
+
+        ``output_format="vv"`` (the public-API default) renders the final answer
+        in the Vísindavefur publish format. VV is a whole-document transform —
+        it reconstructs footnotes and a Heimildir block from the structured
+        references — so it cannot be applied to a half-streamed answer. The
+        per-``token`` events therefore always carry Markdown; the VV result is
+        delivered in the terminal ``answer_final`` event, which clients already
+        treat as the authoritative text to replace their accumulated tokens
+        with. ``"markdown"`` (the internal default) leaves the answer untouched.
+        """
         query_id = f"q_{uuid.uuid4().hex[:12]}"
         bypass_cache = include_thinking or skip_cache
+
+        def _answer_final_event(text: str, refs: list[dict]) -> dict:
+            """Build the terminal `answer_final` event, VV-rendered when the
+            caller asked for the Vísindavefur publish format."""
+            rendered = to_vv_html(text, refs) if output_format == "vv" else text
+            return {"event": "answer_final", "data": json.dumps({"text": rendered})}
 
         try:
             # Web search mode — skip RAG entirely
@@ -354,6 +408,10 @@ class RAGService:
                     yield {"event": "status", "data": json.dumps({"stage": "complete", "message": "Cached response"})}
                     for word in cached.get("answer", "").split():
                         yield {"event": "token", "data": json.dumps({"text": word + " "})}
+                    if output_format == "vv":
+                        yield _answer_final_event(
+                            cached.get("answer", ""), cached.get("references", [])
+                        )
                     yield {"event": "references", "data": json.dumps({"references": cached.get("references", [])})}
                     yield {
                         "event": "done",
@@ -377,6 +435,8 @@ class RAGService:
                 flash_model = settings_service.get("model.flash_name")
                 for word in decline.split():
                     yield {"event": "token", "data": json.dumps({"text": word + " "})}
+                if output_format == "vv":
+                    yield _answer_final_event(decline, [])
                 yield {"event": "references", "data": json.dumps({"references": []})}
                 yield {
                     "event": "done",
@@ -403,6 +463,8 @@ class RAGService:
                 no_result = (settings_service.get("prompt.no_results_en") if language == "en"
                              else settings_service.get("prompt.no_results_is"))
                 yield {"event": "token", "data": json.dumps({"text": no_result})}
+                if output_format == "vv":
+                    yield _answer_final_event(no_result, [])
                 yield {"event": "references", "data": json.dumps({"references": []})}
                 yield {
                     "event": "done",
@@ -454,7 +516,7 @@ class RAGService:
             ]
 
             answer_text = _renumber_citations("".join(full_answer), number_map)
-            yield {"event": "answer_final", "data": json.dumps({"text": answer_text})}
+            yield _answer_final_event(answer_text, references)
             yield {"event": "references", "data": json.dumps({"references": references})}
             if used_ids and not re.search(r"\[\d+\]", answer_text):
                 logger.warning("Answer has references but no [N] citations (query_id=%s)", query_id)

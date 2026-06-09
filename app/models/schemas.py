@@ -111,6 +111,19 @@ class QueryRequest(BaseModel):
             "whitespace-trimmed."
         ),
     )
+    format: str = Field(
+        default="vv",
+        pattern="^(vv|markdown)$",
+        description=(
+            "Output format for the answer. 'vv' (default) returns the "
+            "Vísindavefur publish format — the same HTML+template flavour "
+            "(<strong>, <b>, {{footnote|...}}, {{footnote_list|}}, Heimildir "
+            "block) produced by the review/export mechanism. 'markdown' returns "
+            "the raw Markdown the model emits. In streaming mode the VV result "
+            "is delivered in the terminal `answer_final` event; incremental "
+            "`token` events are always Markdown."
+        ),
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -120,6 +133,7 @@ class QueryRequest(BaseModel):
                 "top_k": 5,
                 "language": "auto",
                 "model": "pro",
+                "format": "vv",
             }
         }
     )

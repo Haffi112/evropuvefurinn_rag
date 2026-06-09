@@ -42,7 +42,12 @@ def _get_rag(request: Request) -> RAGService:
         "Events include `references` (sources found), `chunk` (answer tokens), and "
         "`done` (final metadata).\n\n"
         "**JSON:** Set `stream: false` to receive a single JSON response with the "
-        "complete answer and references."
+        "complete answer and references.\n\n"
+        "**Format:** `format` defaults to `vv` — the answer is returned in the "
+        "Vísindavefur publish format (the same HTML+template flavour the "
+        "review/export mechanism produces). Set `format: \"markdown\"` to get the "
+        "raw Markdown instead. When streaming, the VV answer is delivered in the "
+        "terminal `answer_final` event; `token` events stay Markdown."
     ),
 )
 @limiter.limit("10/minute")
@@ -64,6 +69,7 @@ async def query_endpoint(request: Request, body: QueryRequest):
                 score_threshold=body.score_threshold,
                 include_thinking=body.include_thinking,
                 model_override=resolved_model,
+                output_format=body.format,
             )
         )
 
@@ -74,6 +80,7 @@ async def query_endpoint(request: Request, body: QueryRequest):
             score_threshold=body.score_threshold,
             include_thinking=body.include_thinking,
             model_override=resolved_model,
+            output_format=body.format,
         )
     except Exception:
         logger.error("Non-streaming query failed", exc_info=True)

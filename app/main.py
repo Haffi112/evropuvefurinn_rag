@@ -106,6 +106,9 @@ and Iceland's relationship with it, backed by a curated knowledge base of ~670 a
   to produce grounded, referenced answers in Icelandic or English.
 - **Streaming** — the `/query` endpoint supports Server-Sent Events (SSE) for
   real-time token streaming.
+- **Publish-ready output** — `/query` returns the Vísindavefur publish format by
+  default (`format: "vv"`), matching the review/export mechanism; pass
+  `format: "markdown"` for raw Markdown.
 - **Article management** — full CRUD + bulk upsert for the knowledge base, with
   automatic vector re-indexing.
 

@@ -123,3 +123,39 @@ def test_streaming_branch_forwards_model_override(client_and_fake):
     assert r.status_code == 200
     assert fake.calls[-1]["stream"] is True
     assert fake.calls[-1]["kwargs"]["model_override"] == "pro"
+
+
+# ── format param wiring ──────────────────────────────────────
+
+
+def test_format_defaults_to_vv(client_and_fake):
+    # The public-API default is the Vísindavefur publish format, so an omitted
+    # `format` must forward output_format="vv" (the collaborator's request).
+    client, fake = client_and_fake
+    r = _post(client)
+    assert r.status_code == 200
+    assert fake.calls[-1]["kwargs"]["output_format"] == "vv"
+
+
+def test_explicit_markdown_forwards_markdown(client_and_fake):
+    client, fake = client_and_fake
+    r = _post(client, format="markdown")
+    assert r.status_code == 200
+    assert fake.calls[-1]["kwargs"]["output_format"] == "markdown"
+
+
+def test_streaming_branch_forwards_format(client_and_fake):
+    client, fake = client_and_fake
+    r = client.post(
+        "/api/v1/query",
+        json={"query": "Hvað er ESB?", "stream": True, "format": "markdown"},
+    )
+    assert r.status_code == 200
+    assert fake.calls[-1]["stream"] is True
+    assert fake.calls[-1]["kwargs"]["output_format"] == "markdown"
+
+
+def test_invalid_format_returns_422(client_and_fake):
+    client, _fake = client_and_fake
+    r = _post(client, format="pdf")
+    assert r.status_code == 422
