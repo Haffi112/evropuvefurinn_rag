@@ -56,12 +56,15 @@ def test_italic_underscore_form():
     assert "<em>Guðmundur</em>" in out
 
 
-def test_unordered_list():
+def test_unordered_list_is_single_line():
     md = "Listi:\n- hér\n- og hér"
     out = to_vv_html(md, [])
-    assert "<ul>" in out and "</ul>" in out
-    assert "<li>hér</li>" in out
-    assert "<li>og hér</li>" in out
+    # The whole <ul>…</ul> block on a single line — the CMS reads newlines
+    # inside the list as paragraph breaks, splitting the list apart.
+    assert "<ul><li>hér</li><li>og hér</li></ul>" in out
+    # The lead-in paragraph gets a blank line before the list even though
+    # the source Markdown glued them together.
+    assert "Listi:\n\n<ul>" in out
 
 
 def test_ordered_list_has_no_blank_lines_between_items():
@@ -70,6 +73,25 @@ def test_ordered_list_has_no_blank_lines_between_items():
     # The whole <ol>…</ol> block should be on a single line — no newline
     # between </li> and <li> (CMS rendering quirk).
     assert "<ol><li>hér</li><li>og hér</li></ol>" in out
+
+
+def test_blocks_are_separated_by_blank_lines_regardless_of_source():
+    """Per VV feedback: every paragraph must be followed by a línubil
+    ("\\n") — the CMS derives paragraph breaks from it. This must hold even
+    when the LLM emits blocks with no blank lines between them."""
+    md = "### Fyrirsögn\nFyrsta málsgrein.\nÖnnur málsgrein.\n- listi"
+    out = to_vv_html(md, [])
+    assert (
+        "<strong>Fyrirsögn</strong>\n\n"
+        "Fyrsta málsgrein.\n\n"
+        "Önnur málsgrein.\n\n"
+        "<ul><li>listi</li></ul>"
+    ) in out
+
+
+def test_runs_of_blank_lines_collapse_to_one():
+    out = to_vv_html("Fyrsta.\n\n\n\nÖnnur.", [])
+    assert "Fyrsta.\n\nÖnnur." in out
 
 
 def test_citation_becomes_footnote_with_period_moved_before():
@@ -159,6 +181,17 @@ def test_heimildir_block_appended_when_refs_present():
     assert 'href="https://evropuvefur.is/eftadomur"' in out
     # The Heimildir block should come AFTER the footnote_list marker.
     assert out.index("{{footnote_list|}}") < out.index("<strong>Heimildir:</strong>")
+
+
+def test_heimildir_heading_on_own_line_and_list_single_line():
+    """The heading must NOT be glued to the <ul> on one line, and the list
+    itself must contain no internal newlines."""
+    out = to_vv_html("Svar.", [REF_EU, REF_NYT])
+    assert "<strong>Heimildir:</strong>\n\n<ul><li>" in out
+    ul = out[out.index("<strong>Heimildir:</strong>") :]
+    start, end = ul.index("<ul>"), ul.index("</ul>")
+    assert "\n" not in ul[start:end]
+    assert ul.count("<li>") == 2
 
 
 def test_no_heimildir_block_when_refs_empty():

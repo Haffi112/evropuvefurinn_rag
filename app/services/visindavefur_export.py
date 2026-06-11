@@ -6,11 +6,18 @@ Output uses:
   - <b>...</b> for bold
   - <em>...</em> for italic
   - <ul><li>…</li></ul> for unordered lists
-  - <ol><li>…</li><li>…</li></ol> for ordered lists, with NO blank lines
-    between <li> items (a rendering quirk of the target CMS).
+  - <ol><li>…</li><li>…</li></ol> for ordered lists
   - {{footnote|text=…}} for inline citations, mapped from [[N]](url) markers
     emitted by the LLM per its system prompt.
   - {{footnote_list|}} marker followed by a <strong>Heimildir:</strong> block.
+
+Layout contract (per Vísindavefur editorial feedback): every block —
+paragraph, heading, or list — sits on a single line and is followed by a
+blank line; the VV CMS derives paragraph breaks from those newlines
+("kerfið sér um restina"). This holds regardless of whether the source
+Markdown had blank lines between blocks, and it is also why list HTML must
+contain no internal newlines — a newline between <li> items would be read
+as a paragraph break inside the list.
 """
 
 from __future__ import annotations
@@ -114,24 +121,31 @@ def _apply_inline(text: str) -> str:
 
 
 def _render_body(body: str) -> str:
-    """Walk the post-citation body line-by-line and emit VV-formatted HTML."""
+    """Walk the post-citation body and emit VV-formatted HTML as a sequence
+    of blocks, each separated by exactly one blank line.
+
+    LLM output never soft-wraps, so every non-blank line is its own block
+    (paragraph, heading, or list item); blank lines in the source carry no
+    extra information and are dropped. Normalising separation here — rather
+    than preserving the source's line structure — guarantees the CMS sees a
+    paragraph break after every block even when the model glued a heading
+    or list directly onto adjacent text.
+    """
     lines = body.splitlines()
-    out: list[str] = []
+    blocks: list[str] = []
     i = 0
     while i < len(lines):
-        line = lines[i]
-        stripped = line.strip()
+        stripped = lines[i].strip()
 
-        # Blank line — preserve as paragraph break.
+        # Blank line — block separation is normalised on output; skip.
         if not stripped:
-            out.append("")
             i += 1
             continue
 
         # Heading: `# …`, `## …`, `### …` → <strong>…</strong>
         m = HEADING_RE.match(stripped)
         if m:
-            out.append(f"<strong>{_apply_inline(m.group(2))}</strong>")
+            blocks.append(f"<strong>{_apply_inline(m.group(2))}</strong>")
             i += 1
             continue
 
@@ -144,10 +158,7 @@ def _render_body(body: str) -> str:
                     break
                 items.append(_apply_inline(m2.group(2)))
                 i += 1
-            # No newlines between <li> — VV renders blank lines between
-            # <li> as extra vertical space.
-            li_html = "".join(f"<li>{it}</li>" for it in items)
-            out.append(f"<ol>{li_html}</ol>")
+            blocks.append(_render_list("ol", items))
             continue
 
         # Unordered list — collect consecutive `- item` / `* item` lines.
@@ -159,30 +170,26 @@ def _render_body(body: str) -> str:
                     break
                 items.append(_apply_inline(m2.group(1)))
                 i += 1
-            li_html = "\n  ".join(f"<li>{it}</li>" for it in items)
-            out.append(f"<ul>\n  {li_html}\n</ul>")
+            blocks.append(_render_list("ul", items))
             continue
 
         # Plain paragraph line.
-        out.append(_apply_inline(stripped))
+        blocks.append(_apply_inline(stripped))
         i += 1
 
-    # Collapse runs of blank lines and trim trailing whitespace.
-    rendered: list[str] = []
-    prev_blank = False
-    for line in out:
-        if line == "":
-            if prev_blank:
-                continue
-            prev_blank = True
-        else:
-            prev_blank = False
-        rendered.append(line)
-    return "\n".join(rendered).strip()
+    return "\n\n".join(blocks)
+
+
+def _render_list(tag: str, items: list[str]) -> str:
+    """Render a list on a single line — the CMS reads any newline inside
+    the list as a paragraph break, splitting the list apart."""
+    li_html = "".join(f"<li>{it}</li>" for it in items)
+    return f"<{tag}>{li_html}</{tag}>"
 
 
 def _render_heimildir(references: list[dict]) -> str:
-    """Build the `<strong>Heimildir:</strong><ul>...</ul>` block."""
+    """Build the Heimildir block: a `<strong>Heimildir:</strong>` heading
+    line, a blank line, then the whole `<ul>…</ul>` on a single line."""
     if not references:
         return ""
     items: list[str] = []
@@ -196,8 +203,7 @@ def _render_heimildir(references: list[dict]) -> str:
             )
         else:
             items.append(f"<li>{title}</li>")
-    li_html = "\n  ".join(items)
-    return f"<strong>Heimildir:</strong><ul>\n  {li_html}\n</ul>"
+    return f"<strong>Heimildir:</strong>\n\n<ul>{''.join(items)}</ul>"
 
 
 def to_vv_html(answer_md: str, references: list[dict] | None = None) -> str:
@@ -220,8 +226,6 @@ def to_vv_html(answer_md: str, references: list[dict] | None = None) -> str:
 
     parts = [rendered_body]
     if refs:
-        parts.append("")
         parts.append("{{footnote_list|}}")
-        parts.append("")
         parts.append(_render_heimildir(refs))
-    return "\n".join(p for p in parts).strip() + "\n"
+    return "\n\n".join(p for p in parts if p).strip() + "\n"
