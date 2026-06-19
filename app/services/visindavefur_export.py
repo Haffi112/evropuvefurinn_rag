@@ -12,12 +12,19 @@ Output uses:
   - {{footnote_list|}} marker followed by a <strong>Heimildir:</strong> block.
 
 Layout contract (per Vísindavefur editorial feedback): every block —
-paragraph, heading, or list — sits on a single line and is followed by a
-blank line; the VV CMS derives paragraph breaks from those newlines
-("kerfið sér um restina"). This holds regardless of whether the source
-Markdown had blank lines between blocks, and it is also why list HTML must
-contain no internal newlines — a newline between <li> items would be read
-as a paragraph break inside the list.
+paragraph, heading, or list — sits on a single line, and blocks are
+separated by blank lines; the VV CMS derives paragraph breaks from those
+newlines ("kerfið sér um restina"). This holds regardless of whether the
+source Markdown had blank lines between blocks, and it is also why list
+HTML must contain no internal newlines — a newline between <li> items
+would be read as a paragraph break inside the list.
+
+Headings (<strong>) and lists (<ul>/<ol>) need MORE separation than plain
+paragraphs: a single blank line around them renders too tight in the CMS,
+so the editor asked for two blank lines before and after each. Plain
+paragraphs keep one blank line. This extra padding is a workaround for the
+CMS's own newline handling and is expected to be relaxed once that is
+fixed (the editor's "Einhvern daginn bætum við úr þessari kvöð").
 """
 
 from __future__ import annotations
@@ -39,6 +46,26 @@ HEIMILDIR_HEADER_RE = re.compile(
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 UL_RE = re.compile(r"^[-*]\s+(.*)$")
 OL_RE = re.compile(r"^(\d+)\.\s+(.*)$")
+
+# Block separators. Plain paragraphs are separated by one blank line; headings
+# and lists are padded with two blank lines on each side (see module docstring).
+_BLOCK_GAP = "\n\n"  # one blank line — between plain paragraphs
+_PADDED_BLOCK_GAP = "\n\n\n"  # two blank lines — around headings and lists
+_PADDED_PREFIXES = ("<strong>", "<ul>", "<ol>")
+
+
+def _join_blocks(blocks: list[str]) -> str:
+    """Join rendered blocks, widening the gap to two blank lines whenever a
+    heading or list sits on either side of the boundary."""
+    out: list[str] = []
+    for idx, block in enumerate(blocks):
+        if idx:
+            padded = blocks[idx - 1].startswith(_PADDED_PREFIXES) or block.startswith(
+                _PADDED_PREFIXES
+            )
+            out.append(_PADDED_BLOCK_GAP if padded else _BLOCK_GAP)
+        out.append(block)
+    return "".join(out)
 
 
 def _format_reference(ref: dict) -> str:
@@ -120,16 +147,16 @@ def _apply_inline(text: str) -> str:
     return text
 
 
-def _render_body(body: str) -> str:
-    """Walk the post-citation body and emit VV-formatted HTML as a sequence
-    of blocks, each separated by exactly one blank line.
+def _render_blocks(body: str) -> list[str]:
+    """Walk the post-citation body and emit VV-formatted HTML as a list of
+    single-line blocks (paragraphs, headings, lists), to be joined with
+    blank-line separators by `_join_blocks`.
 
-    LLM output never soft-wraps, so every non-blank line is its own block
-    (paragraph, heading, or list item); blank lines in the source carry no
-    extra information and are dropped. Normalising separation here — rather
-    than preserving the source's line structure — guarantees the CMS sees a
-    paragraph break after every block even when the model glued a heading
-    or list directly onto adjacent text.
+    LLM output never soft-wraps, so every non-blank line is its own block;
+    blank lines in the source carry no extra information and are dropped.
+    Normalising separation here — rather than preserving the source's line
+    structure — guarantees the CMS sees a paragraph break after every block
+    even when the model glued a heading or list directly onto adjacent text.
     """
     lines = body.splitlines()
     blocks: list[str] = []
@@ -177,7 +204,7 @@ def _render_body(body: str) -> str:
         blocks.append(_apply_inline(stripped))
         i += 1
 
-    return "\n\n".join(blocks)
+    return blocks
 
 
 def _render_list(tag: str, items: list[str]) -> str:
@@ -187,11 +214,12 @@ def _render_list(tag: str, items: list[str]) -> str:
     return f"<{tag}>{li_html}</{tag}>"
 
 
-def _render_heimildir(references: list[dict]) -> str:
-    """Build the Heimildir block: a `<strong>Heimildir:</strong>` heading
-    line, a blank line, then the whole `<ul>…</ul>` on a single line."""
+def _render_heimildir_blocks(references: list[dict]) -> list[str]:
+    """Build the Heimildir section as two blocks — a `<strong>Heimildir:</strong>`
+    heading and the `<ul>…</ul>` list — so `_join_blocks` pads them like any
+    other heading/list."""
     if not references:
-        return ""
+        return []
     items: list[str] = []
     for ref in references:
         title = escape((ref.get("title") or "Án titils").strip())
@@ -203,7 +231,7 @@ def _render_heimildir(references: list[dict]) -> str:
             )
         else:
             items.append(f"<li>{title}</li>")
-    return f"<strong>Heimildir:</strong>\n\n<ul>{''.join(items)}</ul>"
+    return ["<strong>Heimildir:</strong>", f"<ul>{''.join(items)}</ul>"]
 
 
 def to_vv_html(answer_md: str, references: list[dict] | None = None) -> str:
@@ -222,10 +250,9 @@ def to_vv_html(answer_md: str, references: list[dict] | None = None) -> str:
     refs = references or []
     body = _strip_trailing_heimildir(answer_md or "")
     body = _replace_citations(body, refs)
-    rendered_body = _render_body(body)
+    blocks = _render_blocks(body)
 
-    parts = [rendered_body]
     if refs:
-        parts.append("{{footnote_list|}}")
-        parts.append(_render_heimildir(refs))
-    return "\n\n".join(p for p in parts if p).strip() + "\n"
+        blocks.append("{{footnote_list|}}")
+        blocks.extend(_render_heimildir_blocks(refs))
+    return _join_blocks(blocks).strip() + "\n"

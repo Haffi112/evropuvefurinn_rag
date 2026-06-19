@@ -62,9 +62,9 @@ def test_unordered_list_is_single_line():
     # The whole <ul>…</ul> block on a single line — the CMS reads newlines
     # inside the list as paragraph breaks, splitting the list apart.
     assert "<ul><li>hér</li><li>og hér</li></ul>" in out
-    # The lead-in paragraph gets a blank line before the list even though
-    # the source Markdown glued them together.
-    assert "Listi:\n\n<ul>" in out
+    # The lead-in paragraph gets TWO blank lines before the list even though
+    # the source Markdown glued them together (CMS needs the extra padding).
+    assert "Listi:\n\n\n<ul>" in out
 
 
 def test_ordered_list_has_no_blank_lines_between_items():
@@ -76,20 +76,32 @@ def test_ordered_list_has_no_blank_lines_between_items():
 
 
 def test_blocks_are_separated_by_blank_lines_regardless_of_source():
-    """Per VV feedback: every paragraph must be followed by a línubil
-    ("\\n") — the CMS derives paragraph breaks from it. This must hold even
-    when the LLM emits blocks with no blank lines between them."""
+    """Per VV feedback: blocks are separated by blank lines (the CMS derives
+    paragraph breaks from them), and this holds even when the LLM emits
+    blocks with no blank lines between them. Headings and lists get two
+    blank lines of padding; plain paragraphs get one."""
     md = "### Fyrirsögn\nFyrsta málsgrein.\nÖnnur málsgrein.\n- listi"
     out = to_vv_html(md, [])
     assert (
-        "<strong>Fyrirsögn</strong>\n\n"
-        "Fyrsta málsgrein.\n\n"
-        "Önnur málsgrein.\n\n"
+        "<strong>Fyrirsögn</strong>\n\n\n"  # two blank lines after a heading
+        "Fyrsta málsgrein.\n\n"             # one blank line between paragraphs
+        "Önnur málsgrein.\n\n\n"            # two blank lines before a list
         "<ul><li>listi</li></ul>"
     ) in out
 
 
-def test_runs_of_blank_lines_collapse_to_one():
+def test_headings_and_lists_get_two_blank_lines_padding():
+    """Headings (<strong>) and lists (<ul>/<ol>) must be preceded AND
+    followed by two blank lines ("\\n\\n\\n"); plain paragraphs keep one."""
+    md = "Inngangur.\n\n## Kafli\n\nMálsgrein.\n\n1. eitt\n2. tvö\n\nNiðurlag."
+    out = to_vv_html(md, [])
+    # Two blank lines on each side of the heading.
+    assert "Inngangur.\n\n\n<strong>Kafli</strong>\n\n\nMálsgrein." in out
+    # Two blank lines on each side of the ordered list.
+    assert "Málsgrein.\n\n\n<ol><li>eitt</li><li>tvö</li></ol>\n\n\nNiðurlag." in out
+
+
+def test_runs_of_blank_lines_collapse_to_one_between_paragraphs():
     out = to_vv_html("Fyrsta.\n\n\n\nÖnnur.", [])
     assert "Fyrsta.\n\nÖnnur." in out
 
@@ -187,7 +199,7 @@ def test_heimildir_heading_on_own_line_and_list_single_line():
     """The heading must NOT be glued to the <ul> on one line, and the list
     itself must contain no internal newlines."""
     out = to_vv_html("Svar.", [REF_EU, REF_NYT])
-    assert "<strong>Heimildir:</strong>\n\n<ul><li>" in out
+    assert "<strong>Heimildir:</strong>\n\n\n<ul><li>" in out
     ul = out[out.index("<strong>Heimildir:</strong>") :]
     start, end = ul.index("<ul>"), ul.index("</ul>")
     assert "\n" not in ul[start:end]
