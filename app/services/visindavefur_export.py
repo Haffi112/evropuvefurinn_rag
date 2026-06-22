@@ -24,7 +24,8 @@ separated by blank lines; the VV CMS derives paragraph breaks from those
 newlines ("kerfið sér um restina"). This holds regardless of whether the
 source Markdown had blank lines between blocks, and it is also why list
 HTML must contain no internal newlines — a newline between <li> items
-would be read as a paragraph break inside the list.
+would be read as a paragraph break inside the list. Line endings in the
+emitted document are CRLF ("\r\n"), which is what the CMS expects.
 
 Blank-line spacing is tiered, because the CMS preserves blank lines and the
 editor wanted progressively more breathing room: sub-headings get the most,
@@ -64,6 +65,11 @@ _LIST_GAP = "\n\n\n"  # two blank lines — around <ul>/<ol> lists
 _HEADING_GAP = "\n\n\n\n"  # three blank lines — around <strong> sub-headings
 _HEADING_PREFIX = "<strong>"
 _LIST_PREFIXES = ("<ul>", "<ol>")
+
+# The CMS wants Windows-style CRLF line endings, not bare LF. We build the
+# document with "\n" internally (so the gap constants above stay readable as
+# blank-line counts) and convert every newline to "\r\n" in one final step.
+_LINE_ENDING = "\r\n"
 
 
 def _gap_between(prev: str, curr: str) -> str:
@@ -255,4 +261,7 @@ def to_vv_html(answer_md: str, references: list[dict] | None = None) -> str:
     # source articles separately as "tengd svör" (see module docstring).
     if refs:
         blocks.append("{{footnote_list|}}")
-    return _join_blocks(blocks).strip() + "\n"
+
+    # Assemble with LF, then serialize to CRLF (what the CMS expects).
+    document = _join_blocks(blocks).strip()
+    return document.replace("\n", _LINE_ENDING) + _LINE_ENDING

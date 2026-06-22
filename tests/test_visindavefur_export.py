@@ -20,8 +20,9 @@ REF_NYT = {
 
 
 def test_empty_input_returns_empty():
-    assert to_vv_html("", []) == "\n"
-    assert to_vv_html("", None) == "\n"
+    # Output uses CRLF line endings (what the CMS expects).
+    assert to_vv_html("", []) == "\r\n"
+    assert to_vv_html("", None) == "\r\n"
 
 
 def test_heading_becomes_strong():
@@ -64,7 +65,8 @@ def test_unordered_list_is_single_line():
     assert "<ul><li>hér</li><li>og hér</li></ul>" in out
     # The lead-in paragraph gets TWO blank lines before the list even though
     # the source Markdown glued them together (CMS needs the extra padding).
-    assert "Listi:\n\n\n<ul>" in out
+    # Line endings are CRLF.
+    assert "Listi:\r\n\r\n\r\n<ul>" in out
 
 
 def test_ordered_list_has_no_blank_lines_between_items():
@@ -83,9 +85,9 @@ def test_blocks_are_separated_by_blank_lines_regardless_of_source():
     md = "### Fyrirsögn\nFyrsta málsgrein.\nÖnnur málsgrein.\n- listi"
     out = to_vv_html(md, [])
     assert (
-        "<strong>Fyrirsögn</strong>\n\n\n\n"  # three blank lines after a heading
-        "Fyrsta málsgrein.\n\n"               # one blank line between paragraphs
-        "Önnur málsgrein.\n\n\n"              # two blank lines before a list
+        "<strong>Fyrirsögn</strong>\r\n\r\n\r\n\r\n"  # 3 blank CRLF lines after a heading
+        "Fyrsta málsgrein.\r\n\r\n"                   # 1 blank line between paragraphs
+        "Önnur málsgrein.\r\n\r\n\r\n"                # 2 blank lines before a list
         "<ul><li>listi</li></ul>"
     ) in out
 
@@ -96,15 +98,29 @@ def test_subheadings_get_more_spacing_than_lists():
     bold lines with no heading margin of their own."""
     md = "Inngangur.\n\n## Kafli\n\nMálsgrein.\n\n1. eitt\n2. tvö\n\nNiðurlag."
     out = to_vv_html(md, [])
-    # Three blank lines on each side of the sub-heading.
-    assert "Inngangur.\n\n\n\n<strong>Kafli</strong>\n\n\n\nMálsgrein." in out
-    # Two blank lines on each side of the ordered list.
-    assert "Málsgrein.\n\n\n<ol><li>eitt</li><li>tvö</li></ol>\n\n\nNiðurlag." in out
+    # Three blank CRLF lines on each side of the sub-heading.
+    assert (
+        "Inngangur.\r\n\r\n\r\n\r\n<strong>Kafli</strong>\r\n\r\n\r\n\r\nMálsgrein."
+    ) in out
+    # Two blank CRLF lines on each side of the ordered list.
+    assert (
+        "Málsgrein.\r\n\r\n\r\n<ol><li>eitt</li><li>tvö</li></ol>\r\n\r\n\r\nNiðurlag."
+    ) in out
 
 
 def test_runs_of_blank_lines_collapse_to_one_between_paragraphs():
     out = to_vv_html("Fyrsta.\n\n\n\nÖnnur.", [])
-    assert "Fyrsta.\n\nÖnnur." in out
+    assert "Fyrsta.\r\n\r\nÖnnur." in out
+
+
+def test_line_endings_are_crlf_not_bare_lf():
+    """The CMS expects Windows CRLF line endings: every newline in the output
+    is "\\r\\n", and there are no bare "\\n" left."""
+    md = "## Kafli\n\nMálsgrein."
+    out = to_vv_html(md, [])
+    assert "\r\n" in out
+    # No LF that isn't preceded by a CR.
+    assert "\n" not in out.replace("\r\n", "")
 
 
 def test_citation_becomes_footnote_with_period_moved_before():
@@ -403,4 +419,4 @@ def test_full_example_round_trip():
     ) in out
     # No Heimildir list; the {{footnote_list|}} marker is the final element.
     assert "Heimildir" not in out
-    assert out.endswith("{{footnote_list|}}\n")
+    assert out.endswith("{{footnote_list|}}\r\n")
