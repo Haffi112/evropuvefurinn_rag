@@ -9,7 +9,14 @@ Output uses:
   - <ol><li>…</li><li>…</li></ol> for ordered lists
   - {{footnote|text=…}} for inline citations, mapped from [[N]](url) markers
     emitted by the LLM per its system prompt.
-  - {{footnote_list|}} marker followed by a <strong>Heimildir:</strong> block.
+  - {{footnote_list|}} marker — the CMS renders the "Tilvísanir" section from
+    the inline footnotes above.
+
+We deliberately do NOT emit a "Heimildir" list: the cited articles already
+appear in the footnotes/Tilvísanir, and the Vísindavefur CMS shows the
+source articles separately as related answers ("tengd svör", under the
+heading "Svör fræðafólks sem gervigreindin nýtti"). An inline list here
+just duplicated them, so the editor asked us to drop it.
 
 Layout contract (per Vísindavefur editorial feedback): every block —
 paragraph, heading, or list — sits on a single line, and blocks are
@@ -19,12 +26,13 @@ source Markdown had blank lines between blocks, and it is also why list
 HTML must contain no internal newlines — a newline between <li> items
 would be read as a paragraph break inside the list.
 
-Headings (<strong>) and lists (<ul>/<ol>) need MORE separation than plain
-paragraphs: a single blank line around them renders too tight in the CMS,
-so the editor asked for two blank lines before and after each. Plain
-paragraphs keep one blank line. This extra padding is a workaround for the
-CMS's own newline handling and is expected to be relaxed once that is
-fixed (the editor's "Einhvern daginn bætum við úr þessari kvöð").
+Blank-line spacing is tiered, because the CMS preserves blank lines and the
+editor wanted progressively more breathing room: sub-headings get the most,
+lists less, plain paragraphs the least (see the *_GAP constants). Sub-headings
+need the extra room because we render them as bold <strong> lines rather than
+real heading elements, so they carry no heading margin of their own. This is a
+workaround for the CMS's newline handling and is expected to be relaxed once
+that is fixed (the editor's "Einhvern daginn bætum við úr þessari kvöð").
 """
 
 from __future__ import annotations
@@ -47,23 +55,33 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 UL_RE = re.compile(r"^[-*]\s+(.*)$")
 OL_RE = re.compile(r"^(\d+)\.\s+(.*)$")
 
-# Block separators. Plain paragraphs are separated by one blank line; headings
-# and lists are padded with two blank lines on each side (see module docstring).
-_BLOCK_GAP = "\n\n"  # one blank line — between plain paragraphs
-_PADDED_BLOCK_GAP = "\n\n\n"  # two blank lines — around headings and lists
-_PADDED_PREFIXES = ("<strong>", "<ul>", "<ol>")
+# Block separators, sized by the kind of block on either side of a boundary.
+# The CMS preserves blank lines as vertical space, and the editor asked for
+# progressively more room around lists and (especially) sub-headings. These
+# three constants are the single knobs to turn if the CMS's needs change.
+_PARAGRAPH_GAP = "\n\n"  # one blank line — between plain paragraphs
+_LIST_GAP = "\n\n\n"  # two blank lines — around <ul>/<ol> lists
+_HEADING_GAP = "\n\n\n\n"  # three blank lines — around <strong> sub-headings
+_HEADING_PREFIX = "<strong>"
+_LIST_PREFIXES = ("<ul>", "<ol>")
+
+
+def _gap_between(prev: str, curr: str) -> str:
+    """Pick the separator for a boundary: the widest gap requested by either
+    neighbour wins (heading > list > paragraph)."""
+    if prev.startswith(_HEADING_PREFIX) or curr.startswith(_HEADING_PREFIX):
+        return _HEADING_GAP
+    if prev.startswith(_LIST_PREFIXES) or curr.startswith(_LIST_PREFIXES):
+        return _LIST_GAP
+    return _PARAGRAPH_GAP
 
 
 def _join_blocks(blocks: list[str]) -> str:
-    """Join rendered blocks, widening the gap to two blank lines whenever a
-    heading or list sits on either side of the boundary."""
+    """Join rendered blocks with blank-line separators sized to each boundary."""
     out: list[str] = []
     for idx, block in enumerate(blocks):
         if idx:
-            padded = blocks[idx - 1].startswith(_PADDED_PREFIXES) or block.startswith(
-                _PADDED_PREFIXES
-            )
-            out.append(_PADDED_BLOCK_GAP if padded else _BLOCK_GAP)
+            out.append(_gap_between(blocks[idx - 1], block))
         out.append(block)
     return "".join(out)
 
@@ -214,26 +232,6 @@ def _render_list(tag: str, items: list[str]) -> str:
     return f"<{tag}>{li_html}</{tag}>"
 
 
-def _render_heimildir_blocks(references: list[dict]) -> list[str]:
-    """Build the Heimildir section as two blocks — a `<strong>Heimildir:</strong>`
-    heading and the `<ul>…</ul>` list — so `_join_blocks` pads them like any
-    other heading/list."""
-    if not references:
-        return []
-    items: list[str] = []
-    for ref in references:
-        title = escape((ref.get("title") or "Án titils").strip())
-        url = (ref.get("source_url") or "").strip()
-        if url:
-            safe_url = escape(url, quote=True)
-            items.append(
-                f'<li>{title} <a href="{safe_url}" target="_blank">{escape(url)}</a></li>'
-            )
-        else:
-            items.append(f"<li>{title}</li>")
-    return ["<strong>Heimildir:</strong>", f"<ul>{''.join(items)}</ul>"]
-
-
 def to_vv_html(answer_md: str, references: list[dict] | None = None) -> str:
     """Convert an LLM answer into the Vísindavefur publish format.
 
@@ -252,7 +250,9 @@ def to_vv_html(answer_md: str, references: list[dict] | None = None) -> str:
     body = _replace_citations(body, refs)
     blocks = _render_blocks(body)
 
+    # Emit the {{footnote_list|}} marker (→ the CMS "Tilvísanir" section) when
+    # there are citations, but NOT a "Heimildir" list — the CMS shows the
+    # source articles separately as "tengd svör" (see module docstring).
     if refs:
         blocks.append("{{footnote_list|}}")
-        blocks.extend(_render_heimildir_blocks(refs))
     return _join_blocks(blocks).strip() + "\n"

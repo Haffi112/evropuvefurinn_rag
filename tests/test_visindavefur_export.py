@@ -77,26 +77,27 @@ def test_ordered_list_has_no_blank_lines_between_items():
 
 def test_blocks_are_separated_by_blank_lines_regardless_of_source():
     """Per VV feedback: blocks are separated by blank lines (the CMS derives
-    paragraph breaks from them), and this holds even when the LLM emits
-    blocks with no blank lines between them. Headings and lists get two
-    blank lines of padding; plain paragraphs get one."""
+    paragraph breaks from them), and this holds even when the LLM emits blocks
+    with no blank lines between them. Spacing is tiered — sub-headings widest,
+    lists less, plain paragraphs least."""
     md = "### Fyrirsögn\nFyrsta málsgrein.\nÖnnur málsgrein.\n- listi"
     out = to_vv_html(md, [])
     assert (
-        "<strong>Fyrirsögn</strong>\n\n\n"  # two blank lines after a heading
-        "Fyrsta málsgrein.\n\n"             # one blank line between paragraphs
-        "Önnur málsgrein.\n\n\n"            # two blank lines before a list
+        "<strong>Fyrirsögn</strong>\n\n\n\n"  # three blank lines after a heading
+        "Fyrsta málsgrein.\n\n"               # one blank line between paragraphs
+        "Önnur málsgrein.\n\n\n"              # two blank lines before a list
         "<ul><li>listi</li></ul>"
     ) in out
 
 
-def test_headings_and_lists_get_two_blank_lines_padding():
-    """Headings (<strong>) and lists (<ul>/<ol>) must be preceded AND
-    followed by two blank lines ("\\n\\n\\n"); plain paragraphs keep one."""
+def test_subheadings_get_more_spacing_than_lists():
+    """Sub-headings (<strong>) get three blank lines on each side; lists get
+    two; plain paragraphs one. Headings need the most because they render as
+    bold lines with no heading margin of their own."""
     md = "Inngangur.\n\n## Kafli\n\nMálsgrein.\n\n1. eitt\n2. tvö\n\nNiðurlag."
     out = to_vv_html(md, [])
-    # Two blank lines on each side of the heading.
-    assert "Inngangur.\n\n\n<strong>Kafli</strong>\n\n\nMálsgrein." in out
+    # Three blank lines on each side of the sub-heading.
+    assert "Inngangur.\n\n\n\n<strong>Kafli</strong>\n\n\n\nMálsgrein." in out
     # Two blank lines on each side of the ordered list.
     assert "Málsgrein.\n\n\n<ol><li>eitt</li><li>tvö</li></ol>\n\n\nNiðurlag." in out
 
@@ -186,27 +187,19 @@ def test_trailing_references_section_english_is_stripped():
     assert "[1] foo" not in out
 
 
-def test_heimildir_block_appended_when_refs_present():
-    out = to_vv_html("Svar.", [REF_EU])
-    assert "{{footnote_list|}}" in out
-    assert "<strong>Heimildir:</strong>" in out
-    assert 'href="https://evropuvefur.is/eftadomur"' in out
-    # The Heimildir block should come AFTER the footnote_list marker.
-    assert out.index("{{footnote_list|}}") < out.index("<strong>Heimildir:</strong>")
-
-
-def test_heimildir_heading_on_own_line_and_list_single_line():
-    """The heading must NOT be glued to the <ul> on one line, and the list
-    itself must contain no internal newlines."""
+def test_footnote_list_marker_present_but_no_heimildir_block():
+    """With references, the {{footnote_list|}} marker is emitted (→ the CMS
+    "Tilvísanir" section), but NOT a "Heimildir" list — the CMS shows the
+    source articles separately as "tengd svör"."""
     out = to_vv_html("Svar.", [REF_EU, REF_NYT])
-    assert "<strong>Heimildir:</strong>\n\n\n<ul><li>" in out
-    ul = out[out.index("<strong>Heimildir:</strong>") :]
-    start, end = ul.index("<ul>"), ul.index("</ul>")
-    assert "\n" not in ul[start:end]
-    assert ul.count("<li>") == 2
+    assert "{{footnote_list|}}" in out
+    # No middle-layer Heimildir list of any kind.
+    assert "Heimildir" not in out
+    assert "<ul>" not in out
+    assert "<a href" not in out
 
 
-def test_no_heimildir_block_when_refs_empty():
+def test_no_footnote_list_or_heimildir_when_refs_empty():
     out = to_vv_html("Svar án heimilda.", [])
     assert "{{footnote_list|}}" not in out
     assert "Heimildir" not in out
@@ -272,7 +265,8 @@ def test_single_export_endpoint_uses_reviewed_article_when_present(monkeypatch):
     assert "<strong>Stutta svarið</strong>" in body
     assert "{{footnote|text=EFTA-dómstóllinn — https://evropuvefur.is/eftadomur}}" in body
     assert "{{footnote_list|}}" in body
-    assert "<strong>Heimildir:</strong>" in body
+    # No middle-layer Heimildir list — sources show as "tengd svör" in the CMS.
+    assert "Heimildir" not in body
     # Filename slug includes query_log_id and ASCII-folds Icelandic letters
     # for the Content-Disposition header.
     cd = r.headers.get("content-disposition", "")
@@ -372,7 +366,8 @@ def test_bulk_export_returns_zip_with_html_files(monkeypatch):
         assert any(n.startswith("2_") and n.endswith(".html") for n in names)
         first = zf.read(next(n for n in names if n.startswith("1_"))).decode("utf-8")
         assert "{{footnote|text=A — https://a.example}}" in first
-        assert "<strong>Heimildir:</strong>" in first
+        assert "{{footnote_list|}}" in first
+        assert "Heimildir" not in first
 
 
 def test_full_example_round_trip():
@@ -406,4 +401,6 @@ def test_full_example_round_trip():
         "tilvísanir svona.{{footnote|text=EFTA-dómstóllinn — "
         "https://evropuvefur.is/eftadomur}}"
     ) in out
-    assert out.endswith("</ul>\n")  # Heimildir block is the final element.
+    # No Heimildir list; the {{footnote_list|}} marker is the final element.
+    assert "Heimildir" not in out
+    assert out.endswith("{{footnote_list|}}\n")

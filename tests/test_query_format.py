@@ -61,7 +61,8 @@ def test_vv_converts_answer_to_visindavefur_format():
     # The [[N]](url) markdown citation becomes a VV footnote template ...
     assert "{{footnote" in resp.answer
     assert "{{footnote_list|}}" in resp.answer
-    assert "<strong>Heimildir:</strong>" in resp.answer
+    # No middle-layer "Heimildir" list — the CMS shows sources as "tengd svör".
+    assert "Heimildir" not in resp.answer
     # ... and the raw markdown citation marker is gone.
     assert "[[1]]" not in resp.answer
     # References themselves are untouched — only the answer string is rendered.
