@@ -231,22 +231,30 @@ async def insert_query_log(
     mode: str = "rag",
 ) -> int:
     pool = get_pool()
+    # Empty-answer rows are kept for telemetry but routed straight to
+    # `excluded` so they never reach the reviewer queue. Non-empty rows are
+    # 'pending'. The batch worker treats empty answers as retriable failures,
+    # so every retry attempt logs its own row — without this, each retry would
+    # leave an orphaned blank entry in the reviewer queue.
+    #
+    # NB: this is computed in Python on purpose. Doing it in SQL as
+    # `CASE WHEN $2 IS NULL OR trim($2) = '' ...` made Postgres unable to infer
+    # the type of parameter $2 (AmbiguousParameterError), which silently broke
+    # *every* query-log insert — `_log_query` swallows the error, so it went
+    # unnoticed for weeks.
+    review_status = (
+        "excluded"
+        if response_text is None or response_text.strip() == ""
+        else "pending"
+    )
     async with pool.acquire() as conn:
-        # Empty-answer rows are kept for telemetry but routed straight to
-        # `excluded` so they never reach the reviewer queue. Non-empty rows
-        # fall back to the column default ('pending'). The batch worker
-        # treats empty answers as retriable failures, so every retry attempt
-        # logs its own row — without this, each retry would leave an
-        # orphaned blank entry in the reviewer queue.
         return await conn.fetchval(
             """
             INSERT INTO query_log
                 (query_text, response_text, model_used, "references",
                  scope_declined, cached, latency_ms, ip_address,
                  reviewer_id, mode, review_status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                    CASE WHEN $2 IS NULL OR trim($2) = ''
-                         THEN 'excluded' ELSE 'pending' END)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id
             """,
             query_text,
@@ -259,6 +267,7 @@ async def insert_query_log(
             ip_address,
             reviewer_id,
             mode,
+            review_status,
         )
 
 

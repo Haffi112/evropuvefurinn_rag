@@ -179,7 +179,10 @@ class RAGService:
                 reviewer_id=reviewer_id, mode=mode,
             )
         except Exception:
-            logger.warning("Failed to write query log", exc_info=True)
+            # Logged at ERROR (not WARNING): a persistent failure here means the
+            # audit log is silently going blank, which is exactly how this broke
+            # unnoticed before. Still swallowed so logging never breaks a query.
+            logger.error("Failed to write query log", exc_info=True)
             return None
 
     async def log_failed_query(
