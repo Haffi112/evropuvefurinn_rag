@@ -22,6 +22,35 @@ class LLMResponse(BaseModel):
     references_used: list[str]  # Article IDs the model actually cited
 
 
+# Grammar-constrained structured output. Passing this as `response_format`
+# (instead of the weak `{"type": "json_object"}` JSON mode) makes the provider
+# constrain the decoder to this exact schema, so the model *cannot* sample
+# invalid or nested JSON — preventing the "json inside json" leak at the source.
+# `_extract_structured_answer` below remains as a defensive backstop in case a
+# request ever falls back to a provider that doesn't enforce the schema.
+LLM_RESPONSE_SCHEMA = {
+    "name": "evropuvefur_answer",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "answer": {
+                "type": "string",
+                "description": "The Markdown answer with inline [[N]](url) citations.",
+            },
+            "references_used": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "IDs of the articles actually cited in the answer.",
+            },
+        },
+        "required": ["answer", "references_used"],
+        "additionalProperties": False,
+    },
+}
+STRUCTURED_RESPONSE_FORMAT = {"type": "json_schema", "json_schema": LLM_RESPONSE_SCHEMA}
+
+
 _ENVELOPE_RE = re.compile(r'"answer"\s*:', re.DOTALL)
 _ANSWER_VALUE_RE = re.compile(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)"', re.DOTALL)
 
@@ -256,6 +285,18 @@ class LLMService:
             {"role": "user", "content": user_content},
         ]
 
+    def _structured_extra_body(self, include_thinking: bool) -> dict:
+        """`extra_body` for a structured-output RAG call: force OpenRouter to
+        route only to providers that actually enforce the JSON schema, plus the
+        reasoning budget when thinking is enabled."""
+        extra_body: dict = {"provider": {"require_parameters": True}}
+        if include_thinking:
+            extra_body["reasoning"] = {
+                "effort": "medium",
+                "max_tokens": settings_service.get_int("model.thinking_budget"),
+            }
+        return extra_body
+
     async def generate_stream(
         self, query: str, articles: list[dict], language: str = "auto",
         include_thinking: bool = False, model_override: str | None = None,
@@ -277,17 +318,11 @@ class LLMService:
             "model": model,
             "messages": messages,
             "temperature": settings_service.get_float("model.temperature"),
-            "response_format": {"type": "json_object"},
+            "response_format": STRUCTURED_RESPONSE_FORMAT,
             "stream": True,
             "extra_headers": self._extra_headers,
+            "extra_body": self._structured_extra_body(include_thinking),
         }
-        if include_thinking:
-            kwargs["extra_body"] = {
-                "reasoning": {
-                    "effort": "medium",
-                    "max_tokens": settings_service.get_int("model.thinking_budget"),
-                },
-            }
 
         try:
             stream = await self._client.chat.completions.create(**kwargs)
@@ -409,16 +444,10 @@ class LLMService:
             "model": model,
             "messages": messages,
             "temperature": settings_service.get_float("model.temperature"),
-            "response_format": {"type": "json_object"},
+            "response_format": STRUCTURED_RESPONSE_FORMAT,
             "extra_headers": self._extra_headers,
+            "extra_body": self._structured_extra_body(include_thinking),
         }
-        if include_thinking:
-            kwargs["extra_body"] = {
-                "reasoning": {
-                    "effort": "medium",
-                    "max_tokens": settings_service.get_int("model.thinking_budget"),
-                },
-            }
 
         try:
             response = await self._client.chat.completions.create(**kwargs)

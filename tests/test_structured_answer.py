@@ -10,7 +10,39 @@ tests pin the rule that the envelope is NEVER leaked into the answer text.
 """
 import json
 
-from app.services.llm_service import _extract_structured_answer
+from app.services.llm_service import (
+    LLM_RESPONSE_SCHEMA,
+    STRUCTURED_RESPONSE_FORMAT,
+    LLMService,
+    _extract_structured_answer,
+)
+
+
+# ── Decode-time prevention: grammar-constrained structured output ──────────
+
+
+def test_response_format_is_strict_json_schema():
+    """The request forces the schema at the decoder (json_schema + strict),
+    not the weak best-effort `json_object` mode."""
+    assert STRUCTURED_RESPONSE_FORMAT["type"] == "json_schema"
+    js = STRUCTURED_RESPONSE_FORMAT["json_schema"]
+    assert js is LLM_RESPONSE_SCHEMA
+    assert js["strict"] is True
+    schema = js["schema"]
+    assert schema["required"] == ["answer", "references_used"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["answer"]["type"] == "string"
+    assert schema["properties"]["references_used"]["type"] == "array"
+
+
+def test_extra_body_forces_schema_enforcing_providers():
+    """`provider.require_parameters` makes OpenRouter route only to providers
+    that actually enforce the schema rather than silently downgrading."""
+    svc = LLMService(settings=None)
+    extra = svc._structured_extra_body(include_thinking=False)
+    assert extra["provider"]["require_parameters"] is True
+    # No reasoning budget unless thinking is requested.
+    assert "reasoning" not in extra
 
 
 def test_wellformed_envelope():
