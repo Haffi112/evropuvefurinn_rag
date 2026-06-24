@@ -1,8 +1,18 @@
-import { useState } from "react";
+import { Fragment, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { ChevronDown, ChevronRight, Eye, EyeOff, Search } from "lucide-react";
-import { apiFetch } from "@/lib/api";
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Eye,
+  EyeOff,
+  Search,
+} from "lucide-react";
+import { apiDownload, apiFetch, ApiError } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,6 +46,7 @@ interface QueryLogEntry {
   ip_address: string | null;
   created_at: string;
   review_status: string;
+  mode: string;
 }
 
 interface QueryLogList {
@@ -54,13 +65,90 @@ interface QueryLogStats {
   avg_latency_ms: number;
 }
 
+const PER_PAGE = 30;
+
 export default function QueryLogPage() {
   const queryClient = useQueryClient();
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState("");
-  const [cachedFilter, setCachedFilter] = useState<string>("all");
-  const [modelFilter, setModelFilter] = useState<string>("all");
+  const [searchParams, setSearchParams] = useSearchParams();
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [exporting, setExporting] = useState(false);
+
+  // ── URL-backed state (shareable / bookmarkable) ──────────────
+  const page = Math.max(1, Number(searchParams.get("page") || "1"));
+  const search = searchParams.get("search") || "";
+  const cachedFilter = searchParams.get("cached") || "all";
+  const modelFilter = searchParams.get("model") || "all";
+  const order = searchParams.get("order") === "asc" ? "asc" : "desc";
+  const fromDate = searchParams.get("from") || "";
+  const toDate = searchParams.get("to") || "";
+
+  // Debounce the search box into the URL so typing doesn't spam history/fetches.
+  const [searchInput, setSearchInput] = useState(search);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (searchInput !== (searchParams.get("search") || "")) {
+        updateParams({ search: searchInput });
+      }
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput]);
+
+  function updateParams(
+    updates: Record<string, string>,
+    opts: { resetPage?: boolean } = {},
+  ) {
+    const { resetPage = true } = opts;
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        for (const [k, v] of Object.entries(updates)) {
+          if (v === "" || v == null) next.delete(k);
+          else next.set(k, v);
+        }
+        if (resetPage && !("page" in updates)) next.set("page", "1");
+        return next;
+      },
+      { replace: false },
+    );
+  }
+
+  // ── Build filter params shared by the list query and the export ──
+  function filterParams(): URLSearchParams {
+    const p = new URLSearchParams();
+    p.set("order", order);
+    if (search) p.set("search", search);
+    if (cachedFilter === "yes") p.set("cached", "true");
+    if (cachedFilter === "no") p.set("cached", "false");
+    if (modelFilter !== "all") p.set("model_used", modelFilter);
+    if (fromDate) p.set("date_from", `${fromDate}T00:00:00`);
+    if (toDate) p.set("date_to", `${toDate}T23:59:59`);
+    return p;
+  }
+
+  const listParams = filterParams();
+  listParams.set("page", String(page));
+  listParams.set("per_page", String(PER_PAGE));
+
+  const logs = useQuery<QueryLogList>({
+    queryKey: [
+      "query-logs",
+      page,
+      search,
+      cachedFilter,
+      modelFilter,
+      order,
+      fromDate,
+      toDate,
+    ],
+    queryFn: () => apiFetch(`/api/v1/admin/query-log?${listParams}`),
+  });
+
+  const stats = useQuery<QueryLogStats>({
+    queryKey: ["query-log-stats"],
+    queryFn: () => apiFetch("/api/v1/admin/query-log/stats"),
+    refetchInterval: 30_000,
+  });
 
   async function toggleExclusion(queryId: number, newStatus: string) {
     await apiFetch(`/api/v1/admin/query-log/${queryId}/review-status`, {
@@ -70,24 +158,20 @@ export default function QueryLogPage() {
     queryClient.invalidateQueries({ queryKey: ["query-logs"] });
   }
 
-  const params = new URLSearchParams();
-  params.set("page", String(page));
-  params.set("per_page", "30");
-  if (search) params.set("search", search);
-  if (cachedFilter === "yes") params.set("cached", "true");
-  if (cachedFilter === "no") params.set("cached", "false");
-  if (modelFilter !== "all") params.set("model_used", modelFilter);
-
-  const logs = useQuery<QueryLogList>({
-    queryKey: ["query-logs", page, search, cachedFilter, modelFilter],
-    queryFn: () => apiFetch(`/api/v1/admin/query-log?${params}`),
-  });
-
-  const stats = useQuery<QueryLogStats>({
-    queryKey: ["query-log-stats"],
-    queryFn: () => apiFetch("/api/v1/admin/query-log/stats"),
-    refetchInterval: 30_000,
-  });
+  async function handleExport() {
+    setExporting(true);
+    try {
+      await apiDownload(
+        `/api/v1/admin/query-log/export?${filterParams()}`,
+        "query_log.csv",
+      );
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : String(e);
+      alert(`Export failed: ${msg}`);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   function toggleExpand(id: number) {
     setExpanded((prev) => {
@@ -98,10 +182,22 @@ export default function QueryLogPage() {
   }
 
   const st = stats.data;
+  const totalPages = logs.data?.total_pages ?? 1;
 
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold">Query Log</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-3xl font-bold">Query Log</h1>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleExport}
+          disabled={exporting}
+        >
+          <Download className="mr-1.5 h-4 w-4" />
+          {exporting ? "Exporting…" : "Export CSV"}
+        </Button>
+      </div>
 
       {/* Stats bar */}
       {st && (
@@ -114,25 +210,19 @@ export default function QueryLogPage() {
       )}
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-end gap-3">
         <div className="relative max-w-xs flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="Search queries..."
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             className="pl-10"
           />
         </div>
         <Select
           value={cachedFilter}
-          onValueChange={(v) => {
-            setCachedFilter(v);
-            setPage(1);
-          }}
+          onValueChange={(v) => updateParams({ cached: v === "all" ? "" : v })}
         >
           <SelectTrigger className="w-32">
             <SelectValue placeholder="Cache" />
@@ -145,20 +235,49 @@ export default function QueryLogPage() {
         </Select>
         <Select
           value={modelFilter}
-          onValueChange={(v) => {
-            setModelFilter(v);
-            setPage(1);
-          }}
+          onValueChange={(v) => updateParams({ model: v === "all" ? "" : v })}
         >
           <SelectTrigger className="w-40">
             <SelectValue placeholder="Model" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Models</SelectItem>
-            <SelectItem value="gemini-3-pro">Pro</SelectItem>
-            <SelectItem value="gemini-3-flash">Flash</SelectItem>
+            <SelectItem value="pro">Pro</SelectItem>
+            <SelectItem value="flash">Flash</SelectItem>
           </SelectContent>
         </Select>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-muted-foreground">From</label>
+          <Input
+            type="date"
+            value={fromDate}
+            max={toDate || undefined}
+            onChange={(e) => updateParams({ from: e.target.value })}
+            className="w-40"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-muted-foreground">To</label>
+          <Input
+            type="date"
+            value={toDate}
+            min={fromDate || undefined}
+            onChange={(e) => updateParams({ to: e.target.value })}
+            className="w-40"
+          />
+        </div>
+        {(fromDate || toDate || search || cachedFilter !== "all" || modelFilter !== "all") && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setSearchInput("");
+              setSearchParams({}, { replace: false });
+            }}
+          >
+            Clear filters
+          </Button>
+        )}
       </div>
 
       {/* Table */}
@@ -179,14 +298,28 @@ export default function QueryLogPage() {
                 <TableHead>Status</TableHead>
                 <TableHead>Latency</TableHead>
                 <TableHead>IP</TableHead>
-                <TableHead>Time</TableHead>
+                <TableHead>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateParams({ order: order === "desc" ? "asc" : "desc" })
+                    }
+                    className="flex items-center gap-1 font-medium hover:text-foreground"
+                  >
+                    Time
+                    {order === "desc" ? (
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    ) : (
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {logs.data?.logs.map((log) => (
-                <>
+                <Fragment key={log.id}>
                   <TableRow
-                    key={log.id}
                     className="cursor-pointer"
                     onClick={() => toggleExpand(log.id)}
                   >
@@ -206,6 +339,12 @@ export default function QueryLogPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="space-x-1">
+                      {log.mode === "error" && (
+                        <Badge variant="destructive">error</Badge>
+                      )}
+                      {log.mode === "websearch" && (
+                        <Badge variant="secondary">web</Badge>
+                      )}
                       {log.review_status === "excluded" && (
                         <Badge variant="outline" className="text-xs text-muted-foreground">excluded</Badge>
                       )}
@@ -213,7 +352,7 @@ export default function QueryLogPage() {
                       {log.scope_declined && (
                         <Badge variant="destructive">declined</Badge>
                       )}
-                      {!log.cached && !log.scope_declined && log.review_status !== "excluded" && <Badge>live</Badge>}
+                      {log.mode !== "error" && !log.cached && !log.scope_declined && log.review_status !== "excluded" && <Badge>live</Badge>}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {log.latency_ms != null ? `${log.latency_ms}ms` : "—"}
@@ -221,14 +360,17 @@ export default function QueryLogPage() {
                     <TableCell className="text-xs text-muted-foreground">
                       {log.ip_address ?? "—"}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell
+                      className="text-xs text-muted-foreground"
+                      title={new Date(log.created_at).toLocaleString()}
+                    >
                       {formatDistanceToNow(new Date(log.created_at), {
                         addSuffix: true,
                       })}
                     </TableCell>
                   </TableRow>
                   {expanded.has(log.id) && (
-                    <TableRow key={`${log.id}-detail`}>
+                    <TableRow>
                       <TableCell colSpan={7} className="bg-secondary/50 p-4 detail-accent">
                         <div className="space-y-3 text-sm">
                           <div className="flex items-center justify-between">
@@ -285,7 +427,7 @@ export default function QueryLogPage() {
                       </TableCell>
                     </TableRow>
                   )}
-                </>
+                </Fragment>
               ))}
               {logs.data?.logs.length === 0 && (
                 <TableRow>
@@ -297,27 +439,45 @@ export default function QueryLogPage() {
             </TableBody>
           </Table>
 
-          {logs.data && logs.data.total_pages > 1 && (
-            <div className="flex items-center justify-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => p - 1)}
-              >
-                Previous
-              </Button>
+          {logs.data && (
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <span className="text-sm text-muted-foreground">
-                Page {logs.data.page} of {logs.data.total_pages}
+                {logs.data.total.toLocaleString()} queries
               </span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page >= logs.data.total_pages}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                Next
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={page <= 1}
+                  onClick={() => updateParams({ page: String(page - 1) }, { resetPage: false })}
+                >
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={totalPages}
+                  value={page}
+                  onChange={(e) => {
+                    const p = Math.min(
+                      Math.max(1, Number(e.target.value) || 1),
+                      totalPages,
+                    );
+                    updateParams({ page: String(p) }, { resetPage: false });
+                  }}
+                  className="w-16 text-center"
+                />
+                <span className="text-sm text-muted-foreground">of {totalPages}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={page >= totalPages}
+                  onClick={() => updateParams({ page: String(page + 1) }, { resetPage: false })}
+                >
+                  Next
+                </Button>
+              </div>
             </div>
           )}
         </>

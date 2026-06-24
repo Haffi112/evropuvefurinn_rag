@@ -57,6 +57,7 @@ async def list_query_logs(
     model_used: str | None = Query(default=None),
     scope_declined: bool | None = Query(default=None),
     search: str | None = Query(default=None, max_length=200),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
 ):
     logs, total = await db.list_query_logs(
         page=page,
@@ -67,6 +68,7 @@ async def list_query_logs(
         model_used=model_used,
         scope_declined=scope_declined,
         search=search,
+        order=order,
     )
     # Parse JSONB references from string if needed
     for log in logs:
@@ -89,6 +91,71 @@ async def list_query_logs(
 async def query_log_stats():
     stats = await db.get_query_log_stats()
     return QueryLogStatsResponse(**stats)
+
+
+@router.get(
+    "/query-log/export",
+    summary="Export the filtered query log as CSV",
+    description="Streams every query-log row matching the given filters (the same "
+    "date range, model, cache, scope-declined, and search filters as the list "
+    "endpoint) as a CSV file — not just the current page.",
+)
+async def export_query_log(
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    cached: bool | None = Query(default=None),
+    model_used: str | None = Query(default=None),
+    scope_declined: bool | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=200),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
+):
+    rows = await db.export_query_logs(
+        date_from=date_from,
+        date_to=date_to,
+        cached=cached,
+        model_used=model_used,
+        scope_declined=scope_declined,
+        search=search,
+        order=order,
+    )
+
+    buf = io.StringIO()
+    buf.write("﻿")  # UTF-8 BOM so Excel renders Icelandic characters
+    writer = csv.writer(buf)
+    writer.writerow([
+        "id", "created_at", "query_text", "response_text", "model_used", "mode",
+        "references_count", "scope_declined", "cached", "latency_ms",
+        "review_status", "ip_address",
+    ])
+    for ql in rows:
+        refs = ql.get("references", [])
+        if isinstance(refs, str):
+            refs = json.loads(refs)
+        refs_count = len(refs) if isinstance(refs, list) else 0
+        created = ql["created_at"]
+        writer.writerow([
+            ql["id"],
+            created.isoformat() if hasattr(created, "isoformat") else created,
+            ql["query_text"],
+            ql.get("response_text", "") or "",
+            ql.get("model_used", "") or "",
+            ql.get("mode", ""),
+            refs_count,
+            ql.get("scope_declined", False),
+            ql.get("cached", False),
+            ql.get("latency_ms", "") if ql.get("latency_ms") is not None else "",
+            ql.get("review_status", "pending"),
+            ql.get("ip_address", "") or "",
+        ])
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return StreamingResponse(
+        io.BytesIO(buf.getvalue().encode("utf-8")),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="query_log_{stamp}.csv"'
+        },
+    )
 
 
 # ── Reviewer management ─────────────────────────────────────

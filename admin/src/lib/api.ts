@@ -51,3 +51,43 @@ export async function apiFetch<T>(
 
   return res.json() as Promise<T>;
 }
+
+/**
+ * Fetch a file (with the auth header) and trigger a browser download. Used for
+ * CSV/ZIP exports, which a plain <a href> can't do because they need the
+ * Authorization header.
+ */
+export async function apiDownload(
+  path: string,
+  fallbackName: string,
+): Promise<void> {
+  const key = getApiKey();
+  const headers: Record<string, string> = {};
+  if (key) headers["Authorization"] = `Bearer ${key}`;
+
+  const res = await fetch(path, { headers });
+
+  if (res.status === 401) {
+    clearApiKey();
+    window.location.href = "/admin/login";
+    throw new ApiError(401, "Unauthorized");
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new ApiError(res.status, text);
+  }
+
+  const cd = res.headers.get("content-disposition") || "";
+  const match = cd.match(/filename="?([^"]+)"?/);
+  const filename = match ? match[1] : fallbackName;
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

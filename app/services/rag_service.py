@@ -182,6 +182,17 @@ class RAGService:
             logger.warning("Failed to write query log", exc_info=True)
             return None
 
+    async def log_failed_query(
+        self, query_text: str, ip_address: str | None,
+        start_time: float | None, mode: str = "error",
+    ) -> None:
+        """Record a query that errored out before it could be answered, so the
+        audit log covers every query the API received — not only successful ones."""
+        await self._log_query(
+            query_text, None, None, [], False, False, start_time, ip_address,
+            mode=mode,
+        )
+
     # ── JSON (non-streaming) mode ────────────────────────────
 
     async def process_query_json(
@@ -549,6 +560,11 @@ class RAGService:
 
         except Exception:
             logger.error("Stream failed for query_id=%s", query_id, exc_info=True)
+            # Log the failed query too, so the audit log covers every API query.
+            await self._log_query(
+                query, None, None, [], False, False, start_time, ip_address,
+                reviewer_id=reviewer_id, mode="error",
+            )
             yield {
                 "event": "error",
                 "data": json.dumps({

@@ -200,6 +200,7 @@ class QueryLogEntry(BaseModel):
     ip_address: str | None = None
     created_at: datetime
     review_status: str = "pending"
+    mode: str = "rag"  # 'rag' | 'websearch' | 'error'
 
 
 class QueryLogListResponse(BaseModel):

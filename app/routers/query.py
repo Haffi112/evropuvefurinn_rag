@@ -84,5 +84,7 @@ async def query_endpoint(request: Request, body: QueryRequest):
         )
     except Exception:
         logger.error("Non-streaming query failed", exc_info=True)
+        # Log the failed query so the audit log covers every API query.
+        await rag.log_failed_query(body.query, ip_address, start_time)
         raise HTTPException(status_code=500, detail="Villa kom upp við úrvinnslu fyrirspurnar.")
     return response

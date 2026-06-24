@@ -262,19 +262,22 @@ async def insert_query_log(
         )
 
 
-async def list_query_logs(
-    page: int,
-    per_page: int,
-    date_from: datetime | None = None,
-    date_to: datetime | None = None,
-    cached: bool | None = None,
-    model_used: str | None = None,
-    scope_declined: bool | None = None,
-    search: str | None = None,
-) -> tuple[list[dict], int]:
-    pool = get_pool()
-    offset = (page - 1) * per_page
+_QUERY_LOG_COLUMNS = (
+    'id, query_text, response_text, model_used, mode, "references", '
+    "scope_declined, cached, latency_ms, ip_address, created_at, review_status"
+)
 
+
+def _query_log_filters(
+    date_from: datetime | None,
+    date_to: datetime | None,
+    cached: bool | None,
+    model_used: str | None,
+    scope_declined: bool | None,
+    search: str | None,
+) -> tuple[str, list]:
+    """Build the shared WHERE clause + params for query-log list and export so
+    the exported set always matches what the operator is viewing."""
     conditions: list[str] = []
     params: list = []
     idx = 1
@@ -292,8 +295,10 @@ async def list_query_logs(
         params.append(cached)
         idx += 1
     if model_used is not None:
-        conditions.append(f"model_used = ${idx}")
-        params.append(model_used)
+        # Substring match so UI labels like "pro"/"flash" match full OpenRouter
+        # ids (e.g. "google/gemini-3.5-flash") without pinning exact versions.
+        conditions.append(f"model_used ILIKE ${idx}")
+        params.append(f"%{model_used}%")
         idx += 1
     if scope_declined is not None:
         conditions.append(f"scope_declined = ${idx}")
@@ -305,6 +310,33 @@ async def list_query_logs(
         idx += 1
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    return where, params
+
+
+def _query_log_direction(order: str | None) -> str:
+    """Whitelist the sort direction — never interpolate user input into SQL."""
+    return "ASC" if (order or "").lower() == "asc" else "DESC"
+
+
+async def list_query_logs(
+    page: int,
+    per_page: int,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    cached: bool | None = None,
+    model_used: str | None = None,
+    scope_declined: bool | None = None,
+    search: str | None = None,
+    order: str = "desc",
+) -> tuple[list[dict], int]:
+    pool = get_pool()
+    offset = (page - 1) * per_page
+
+    where, params = _query_log_filters(
+        date_from, date_to, cached, model_used, scope_declined, search
+    )
+    direction = _query_log_direction(order)
+    idx = len(params) + 1
 
     async with pool.acquire() as conn:
         total = await conn.fetchval(
@@ -312,16 +344,42 @@ async def list_query_logs(
         )
         rows = await conn.fetch(
             f"""
-            SELECT id, query_text, response_text, model_used, "references",
-                   scope_declined, cached, latency_ms, ip_address, created_at,
-                   review_status
+            SELECT {_QUERY_LOG_COLUMNS}
             FROM query_log {where}
-            ORDER BY created_at DESC
+            ORDER BY created_at {direction}
             LIMIT ${idx} OFFSET ${idx + 1}
             """,
             *params, per_page, offset,
         )
         return [dict(r) for r in rows], total
+
+
+async def export_query_logs(
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    cached: bool | None = None,
+    model_used: str | None = None,
+    scope_declined: bool | None = None,
+    search: str | None = None,
+    order: str = "desc",
+) -> list[dict]:
+    """All query-log rows matching the same filters as `list_query_logs`, with
+    no pagination — backs the filtered CSV export."""
+    pool = get_pool()
+    where, params = _query_log_filters(
+        date_from, date_to, cached, model_used, scope_declined, search
+    )
+    direction = _query_log_direction(order)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT {_QUERY_LOG_COLUMNS}
+            FROM query_log {where}
+            ORDER BY created_at {direction}
+            """,
+            *params,
+        )
+        return [dict(r) for r in rows]
 
 
 # ── Review Users ────────────────────────────────────────────
