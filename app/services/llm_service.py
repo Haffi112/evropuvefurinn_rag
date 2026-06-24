@@ -22,6 +22,131 @@ class LLMResponse(BaseModel):
     references_used: list[str]  # Article IDs the model actually cited
 
 
+_ENVELOPE_RE = re.compile(r'"answer"\s*:', re.DOTALL)
+_ANSWER_VALUE_RE = re.compile(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)"', re.DOTALL)
+
+
+def _looks_like_envelope(s: str) -> bool:
+    """True if *s* looks like our `{"answer": ...}` structured envelope rather
+    than a plain Markdown answer."""
+    return s.lstrip().startswith("{") and bool(_ENVELOPE_RE.search(s))
+
+
+def _strip_code_fence(s: str) -> str:
+    """Strip a leading ```json / ``` fence and its closing ``` if present."""
+    s = s.strip()
+    if s.startswith("```"):
+        # Drop the opening fence line (``` or ```json) and a trailing fence.
+        s = re.sub(r"^```[a-zA-Z0-9]*\s*\n?", "", s)
+        s = re.sub(r"\n?```\s*$", "", s)
+    return s.strip()
+
+
+def _first_balanced_object(s: str) -> str | None:
+    """Return the first brace-balanced `{...}` substring, ignoring braces that
+    appear inside JSON string values. Tolerates trailing junk after the object
+    (e.g. a stray extra `}` the model sometimes appends)."""
+    start = s.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(s)):
+        ch = s[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return s[start : i + 1]
+    return None
+
+
+def _try_parse_envelope(s: str) -> dict | None:
+    """Parse *s* into a dict, first strictly then by extracting the first
+    brace-balanced object (which discards trailing junk like an extra `}`)."""
+    try:
+        obj = json.loads(s)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+    sub = _first_balanced_object(s)
+    if sub is not None and sub != s:
+        try:
+            obj = json.loads(sub)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
+def _extract_structured_answer(raw: str) -> tuple[str, list[str]]:
+    """Robustly extract ``(answer, references_used)`` from a model response that
+    is *supposed* to be ``{"answer": "<markdown>", "references_used": [...]}``.
+
+    Models occasionally emit malformed or even nested envelopes — an extra
+    trailing brace, pretty-print whitespace, or the whole envelope wrapped a
+    second time inside the answer field. The previous code's fallback dumped the
+    raw envelope straight into the answer, which is what users saw as a garbled
+    "answer-inside-an-answer". This function never returns the raw envelope: it
+    repairs and unwraps what it can (bounded depth), and as a last resort
+    regex-extracts just the answer string. If the model skipped the envelope and
+    returned plain Markdown, that text is returned unchanged.
+    """
+    text = (raw or "").strip()
+    refs: list[str] = []
+
+    for _ in range(4):  # bounded unwrap depth — guards against pathological nesting
+        if not text:
+            return "", refs
+        candidate = _strip_code_fence(text)
+
+        parsed = _try_parse_envelope(candidate)
+        if parsed is not None and "answer" in parsed:
+            used = parsed.get("references_used")
+            if isinstance(used, list):
+                refs = [str(x) for x in used]
+            answer = parsed.get("answer")
+            if not isinstance(answer, str):
+                return "", refs
+            text = answer.strip()
+            if _looks_like_envelope(text):
+                continue  # answer is itself an envelope — unwrap another layer
+            return text, refs
+
+        # Not parseable as our envelope dict.
+        if _looks_like_envelope(candidate):
+            m = _ANSWER_VALUE_RE.search(candidate)
+            if m is None:
+                return "", refs  # broken envelope we can't extract — never leak it
+            try:
+                inner = json.loads('"' + m.group(1) + '"')
+            except json.JSONDecodeError:
+                inner = m.group(1)
+            text = inner.strip()
+            if _looks_like_envelope(text):
+                continue
+            return text, refs
+
+        # Plain Markdown (model skipped the JSON envelope) — use it as-is.
+        return text, refs
+
+    # Exhausted the unwrap budget; refuse to return anything envelope-shaped.
+    return ("" if _looks_like_envelope(text) else text), refs
+
+
 class LLMService:
     def __init__(self, settings: Settings):
         self._settings = settings
@@ -252,15 +377,16 @@ class LLMService:
                         yield ("answer", "".join(decoded))
                 # state == "after": just accumulate, parsed at end
 
-            # Parse complete JSON to extract references_used
+            # Robustly extract the authoritative answer + references from the
+            # complete buffered JSON. The per-token state machine above streams a
+            # best-effort live preview, but a malformed/nested envelope can leak
+            # structure into those tokens; the `answer_final` chunk below carries
+            # the clean text, which the client (and our cache/log) treat as
+            # authoritative and use to replace the streamed preview.
             full_json = "".join(json_buffer)
-            try:
-                parsed = json.loads(full_json)
-                refs = parsed.get("references_used", [])
-            except (json.JSONDecodeError, KeyError):
-                logger.warning("Failed to parse structured response JSON")
-                refs = []
+            answer_clean, refs = _extract_structured_answer(full_json)
             yield ("references", refs)
+            yield ("answer_final", answer_clean)
 
         return model, text_iterator()
 
@@ -315,15 +441,14 @@ class LLMService:
 
         raw_json = response.choices[0].message.content or ""
 
-        # Parse structured JSON response
-        try:
-            parsed = json.loads(raw_json)
-            answer_text = parsed.get("answer", raw_json)
-            refs = parsed.get("references_used", [])
-        except (json.JSONDecodeError, KeyError):
-            logger.warning("Failed to parse structured response JSON, using raw text")
-            answer_text = raw_json
-            refs = []
+        # Robustly extract the answer/refs — never leak a malformed or nested
+        # JSON envelope into the answer text (see _extract_structured_answer).
+        answer_text, refs = _extract_structured_answer(raw_json)
+        if not answer_text:
+            logger.warning(
+                "Could not extract answer from structured response (raw=%r)",
+                raw_json[:500],
+            )
 
         return model, answer_text, thinking_text, refs
 

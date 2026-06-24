@@ -489,12 +489,17 @@ class RAGService:
                 model_override=model_override,
             )
             full_answer = []
+            final_answer: str | None = None
             used_ids: set[str] = set()
             async for chunk_type, chunk_text in token_stream:
                 if chunk_type == "thinking":
                     yield {"event": "thinking", "data": json.dumps({"text": chunk_text})}
                 elif chunk_type == "references":
                     used_ids = set(chunk_text)  # chunk_text is a list of IDs
+                elif chunk_type == "answer_final":
+                    # Authoritative, robustly-extracted answer (see llm_service);
+                    # overrides the streamed preview for the final/cached text.
+                    final_answer = chunk_text
                 else:
                     full_answer.append(chunk_text)
                     yield {"event": "token", "data": json.dumps({"text": chunk_text})}
@@ -515,7 +520,11 @@ class RAGService:
                 if a["id"] in used_ids
             ]
 
-            answer_text = _renumber_citations("".join(full_answer), number_map)
+            # Prefer the clean extracted answer; if extraction came back empty
+            # (e.g. a truncated/unrecoverable envelope), keep the streamed
+            # tokens so a partial answer still reaches the user.
+            raw_answer = final_answer or "".join(full_answer)
+            answer_text = _renumber_citations(raw_answer, number_map)
             yield _answer_final_event(answer_text, references)
             yield {"event": "references", "data": json.dumps({"references": references})}
             if used_ids and not re.search(r"\[\d+\]", answer_text):
