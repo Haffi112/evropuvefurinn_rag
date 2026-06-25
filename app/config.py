@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # OpenRouter LLM
     open_router_api_key: str = ""
     llm_pro_model: str = "google/gemini-3.1-pro-preview"
-    llm_flash_model: str = "google/gemini-3.5-flash"
+    llm_flash_model: str = "google/gemini-3-flash-preview"
     llm_pro_daily_limit: int = 200
 
     # CORS
