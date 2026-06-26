@@ -9,3 +9,9 @@ task: |
   - "yes": clearly about EU/EEA/European integration/Iceland-EU relations
   - "adjacent": related topic that could connect to EU (e.g. NATO in European context, trade policy affecting EU)
   - "no": clearly off-topic (e.g. "What is the capital of Japan?", "Write me a poem")
+
+  The question may be written in ANY language. Judge it by its meaning, not by
+  its language. If the question is in a language you cannot reliably read or
+  understand, do NOT answer "no" — answer "adjacent" so it is not wrongly
+  rejected. Only answer "no" when you clearly understand the question AND it is
+  clearly off-topic.

@@ -190,6 +190,11 @@ class LLMService:
         self._client = AsyncOpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=self._settings.open_router_api_key,
+            # Cap how long a stalled OpenRouter request can hang. Without this
+            # the client waits forever, which is what made low-resource-language
+            # queries (e.g. Esperanto) appear to hang indefinitely. 600s is
+            # generous enough for slow Pro + thinking responses.
+            timeout=600.0,
         )
         logger.info("LLMService initialized (OpenRouter)")
 
@@ -260,6 +265,28 @@ class LLMService:
 
     # ── Generation ───────────────────────────────────────────
 
+    @staticmethod
+    def _lang_instruction(language: str) -> str:
+        """Instruction appended to force the response language.
+
+        - "auto" (or empty): rely on the base prompt's "answer in the same
+          language as the user" rule.
+        - "en"/"is": use the operator-configurable overrides (unchanged).
+        - any other non-empty code: a generic instruction so the service can
+          answer in *any* language, not just Icelandic/English.
+        """
+        if not language or language == "auto":
+            return ""
+        if language == "en":
+            return settings_service.get("prompt.lang_override_en")
+        if language == "is":
+            return settings_service.get("prompt.lang_override_is")
+        return (
+            f"\n\nIMPORTANT: Respond in the language identified by the code "
+            f"'{language}' (ISO 639). If you cannot, respond in the same "
+            f"language as the user's question."
+        )
+
     def _build_context(self, articles: list[dict], language: str) -> str:
         parts = []
         for i, a in enumerate(articles, 1):
@@ -271,11 +298,7 @@ class LLMService:
                 f"Svar:\n{a['answer']}\n"
             )
         context = "\n---\n".join(parts)
-        lang_instruction = ""
-        if language == "en":
-            lang_instruction = settings_service.get("prompt.lang_override_en")
-        elif language == "is":
-            lang_instruction = settings_service.get("prompt.lang_override_is")
+        lang_instruction = self._lang_instruction(language)
         header = settings_service.get("prompt.context_header")
         return f"{header}\n\n{context}{lang_instruction}"
 
@@ -500,11 +523,7 @@ class LLMService:
         await db.quota_increment(model_key)
 
         system_prompt = settings_service.get("prompt.web_search")
-        lang_instruction = ""
-        if language == "en":
-            lang_instruction = settings_service.get("prompt.lang_override_en")
-        elif language == "is":
-            lang_instruction = settings_service.get("prompt.lang_override_is")
+        lang_instruction = self._lang_instruction(language)
 
         messages = [
             {"role": "system", "content": system_prompt + lang_instruction},
@@ -570,11 +589,7 @@ class LLMService:
         await db.quota_increment(model_key)
 
         system_prompt = settings_service.get("prompt.web_search")
-        lang_instruction = ""
-        if language == "en":
-            lang_instruction = settings_service.get("prompt.lang_override_en")
-        elif language == "is":
-            lang_instruction = settings_service.get("prompt.lang_override_is")
+        lang_instruction = self._lang_instruction(language)
 
         messages = [
             {"role": "system", "content": system_prompt + lang_instruction},
