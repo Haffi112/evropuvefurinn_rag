@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.review_schemas import EvaluationChecklist
 
@@ -15,8 +15,21 @@ class ArticleCreate(BaseModel):
     source_url: str = Field(description="Canonical URL where the article is published.")
     date: str = Field(description="Publication date as YYYY-MM-DD string.")
     author: str | None = Field(default=None, description="Author or publishing organization.")
-    categories: list[str] = Field(default_factory=list, description="Topic categories.")
-    tags: list[str] = Field(default_factory=list, description="Free-form tags.")
+    categories: list[str] = Field(default_factory=list, description="Topic categories. May be omitted, [], or null for pages that belong to no published category.")
+    tags: list[str] = Field(default_factory=list, description="Free-form tags. May be omitted, [], or null.")
+
+    @field_validator("categories", "tags", mode="before")
+    @classmethod
+    def _none_to_empty_list(cls, v):
+        """Treat an explicit JSON `null` as an empty list.
+
+        A field with `default_factory=list` only fills in a *missing* key —
+        an explicitly-sent `null` would otherwise fail validation against
+        `list[str]`. Some upstream serializers emit `null` (rather than `[]`)
+        for pages with no categories/tags, so we normalise all three "empty"
+        encodings (absent / `[]` / `null`) to an empty list here.
+        """
+        return [] if v is None else v
 
     model_config = ConfigDict(
         json_schema_extra={
