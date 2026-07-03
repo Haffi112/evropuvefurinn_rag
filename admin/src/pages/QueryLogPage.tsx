@@ -10,6 +10,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  FileCode2,
   Search,
 } from "lucide-react";
 import { apiDownload, apiFetch, ApiError } from "@/lib/api";
@@ -380,6 +381,31 @@ export default function QueryLogPage() {
                                 <Badge variant="outline" className="text-xs">
                                   {log.review_status}
                                 </Badge>
+                              )}
+                              {log.response_text && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    try {
+                                      await apiDownload(
+                                        `/api/v1/admin/reviews/${log.id}/export/visindavefur`,
+                                        `${log.id}_visindavefur.html`,
+                                      );
+                                    } catch (err) {
+                                      const msg =
+                                        err instanceof ApiError
+                                          ? err.message
+                                          : String(err);
+                                      alert(`Export failed: ${msg}`);
+                                    }
+                                  }}
+                                  title="Download this answer as a Vísindavefur-format HTML snippet (uses the reviewed_articles edit when one exists, otherwise the raw LLM response)"
+                                >
+                                  <FileCode2 className="mr-1.5 h-3.5 w-3.5" />
+                                  Download VV format
+                                </Button>
                               )}
                               <Button
                                 variant="outline"
