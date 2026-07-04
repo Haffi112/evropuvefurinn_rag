@@ -52,6 +52,7 @@ INNER_CITATION_RE = re.compile(r"\[\[(\d+)\]\]\(([^)]+)\)")
 HEIMILDIR_HEADER_RE = re.compile(
     r"^\s*##+\s*(Heimildir|References)\s*$", re.IGNORECASE
 )
+HEIMILDIR_ITEM_RE = re.compile(r"^\s*[-*]\s+\[(\d+)\]\s*(.+?)\s*$")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 UL_RE = re.compile(r"^[-*]\s+(.*)$")
 OL_RE = re.compile(r"^(\d+)\.\s+(.*)$")
@@ -101,6 +102,33 @@ def _format_reference(ref: dict) -> str:
     return title
 
 
+def _parse_trailing_heimildir(body: str) -> dict[int, str]:
+    """Parse the trailing `## Heimildir` / `## References` block into a
+    number → text map (entries look like `- [1] Title — https://…`).
+
+    Web-search answers carry their sources ONLY here — their structured
+    `query_log.references` is stored empty — so this block is the sole
+    place the real source titles/URLs exist. Without it, citation lookup
+    falls back to the URL inside the `[[N]](url)` marker, which for
+    grounded answers is an opaque vertexaisearch.cloud.google.com
+    redirect, not the actual source.
+    """
+    lines = body.splitlines()
+    start: int | None = None
+    for i, line in enumerate(lines):
+        if HEIMILDIR_HEADER_RE.match(line):
+            start = i + 1
+            break
+    if start is None:
+        return {}
+    entries: dict[int, str] = {}
+    for line in lines[start:]:
+        m = HEIMILDIR_ITEM_RE.match(line)
+        if m:
+            entries.setdefault(int(m.group(1)), m.group(2))
+    return entries
+
+
 def _strip_trailing_heimildir(body: str) -> str:
     """Remove the trailing `## Heimildir` / `## References` block the
     web-search prompt instructs the LLM to add — we reconstruct it from
@@ -117,15 +145,23 @@ def _strip_trailing_heimildir(body: str) -> str:
     return "\n".join(lines[:cutoff]).rstrip()
 
 
-def _replace_citations(body: str, references: list[dict]) -> str:
+def _replace_citations(
+    body: str, references: list[dict], heimildir_by_number: dict[int, str] | None = None
+) -> str:
     """Turn runs of `[[N]](url)` markers into `{{footnote|text=…}}` blocks.
 
     The system prompt mandates citations like `…sentence[[1]](url).` and
     multi-citations `…sentence[[1]](a)[[2]](b).`. The trailing period (if any)
     is emitted *once* before the whole footnote cluster, regardless of how
     many citations were grouped.
+
+    Footnote text is resolved in priority order: the structured reference
+    (RAG answers), then the answer's own Heimildir entry for that number
+    (web-search answers, whose structured references are empty), and only
+    as a last resort the URL inside the marker itself.
     """
     by_number = {i + 1: ref for i, ref in enumerate(references)}
+    heimildir_by_number = heimildir_by_number or {}
 
     def replace_run(match: re.Match[str]) -> str:
         citations = match.group(1)
@@ -135,7 +171,10 @@ def _replace_citations(body: str, references: list[dict]) -> str:
             n = int(inner.group(1))
             url_in_marker = inner.group(2)
             ref = by_number.get(n)
-            text = _format_reference(ref) if ref else url_in_marker
+            if ref:
+                text = _format_reference(ref)
+            else:
+                text = heimildir_by_number.get(n) or url_in_marker
             # `|` and `}}` would break the template; replace with safe chars.
             safe = text.replace("|", "/").replace("}}", "} }")
             parts.append(f"{{{{footnote|text={safe}}}}}")
@@ -252,14 +291,17 @@ def to_vv_html(answer_md: str, references: list[dict] | None = None) -> str:
         derived from list position (1-indexed) to match the LLM's citations.
     """
     refs = references or []
+    heimildir = _parse_trailing_heimildir(answer_md or "")
     body = _strip_trailing_heimildir(answer_md or "")
-    body = _replace_citations(body, refs)
+    body = _replace_citations(body, refs, heimildir)
     blocks = _render_blocks(body)
 
     # Emit the {{footnote_list|}} marker (→ the CMS "Tilvísanir" section) when
     # there are citations, but NOT a "Heimildir" list — the CMS shows the
     # source articles separately as "tengd svör" (see module docstring).
-    if refs:
+    # Web-search answers have no structured refs, so also key on the
+    # footnotes actually produced.
+    if refs or "{{footnote|" in body:
         blocks.append("{{footnote_list|}}")
 
     # Assemble with LF, then serialize to CRLF (what the CMS expects).

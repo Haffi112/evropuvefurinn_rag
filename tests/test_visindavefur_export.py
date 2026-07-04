@@ -187,6 +187,48 @@ def test_citation_with_unknown_number_falls_back_to_url():
     assert "{{footnote|text=https://example.com/x}}" in out
 
 
+def test_web_search_citations_resolve_via_heimildir_section():
+    """Web-search answers store no structured references — their sources
+    live only in the trailing `## Heimildir` block, and the inline marker
+    URLs are opaque vertexaisearch grounding redirects. Footnote text must
+    come from the Heimildir entry, never the redirect URL."""
+    redirect = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQE123"
+    md = (
+        f"Ísland er í EES[[1]]({redirect})."
+        "\n\n## Heimildir\n\n"
+        "- [1] Stjórnarráðið: EES-samningurinn — https://www.stjornarradid.is/ees\n"
+    )
+    out = to_vv_html(md, [])
+    assert (
+        "{{footnote|text=Stjórnarráðið: EES-samningurinn — "
+        "https://www.stjornarradid.is/ees}}" in out
+    )
+    assert "vertexaisearch" not in out
+    # The footnote_list marker must appear even though structured refs are empty.
+    assert "{{footnote_list|}}" in out
+    # And the raw Heimildir block itself is still stripped from the body.
+    assert "## Heimildir" not in out
+
+
+def test_structured_refs_win_over_heimildir_entries():
+    md = (
+        "Fullyrðing[[1]](https://redirect.example/abc).\n\n"
+        "## Heimildir\n\n- [1] Eitthvað annað — https://annad.example\n"
+    )
+    out = to_vv_html(md, [REF_EU])
+    assert "{{footnote|text=EFTA-dómstóllinn — https://evropuvefur.is/eftadomur}}" in out
+    assert "Eitthvað annað" not in out
+
+
+def test_heimildir_number_missing_falls_back_to_marker_url():
+    md = (
+        "Fullyrðing[[2]](https://fallback.example/x).\n\n"
+        "## Heimildir\n\n- [1] Eina heimildin — https://ein.example\n"
+    )
+    out = to_vv_html(md, [])
+    assert "{{footnote|text=https://fallback.example/x}}" in out
+
+
 def test_trailing_heimildir_section_is_stripped_from_body():
     md = "Svar hér.\n\n## Heimildir\n\n- [1] foo — https://x"
     out = to_vv_html(md, [REF_EU])
