@@ -393,7 +393,12 @@ export default function QueryLogPage() {
                   </TableRow>
                   {expanded.has(log.id) && (
                     <TableRow>
-                      <TableCell colSpan={7} className="bg-secondary/50 p-4 detail-accent">
+                      {/* whitespace-normal overrides TableCell's base
+                          whitespace-nowrap: without it nothing in this detail
+                          block may soft-wrap (nowrap beats overflow-wrap), so
+                          the references list stretches the table past the
+                          viewport. */}
+                      <TableCell colSpan={7} className="whitespace-normal bg-secondary/50 p-4 detail-accent">
                         <div className="space-y-3 text-sm">
                           <div className="flex items-center justify-between">
                             <p className="font-medium">Response:</p>
