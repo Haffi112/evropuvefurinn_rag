@@ -311,16 +311,22 @@ export default function QueryLogPage() {
         </div>
       ) : (
         <>
-          <Table>
+          {/* table-fixed: content can never widen the table past its
+              container — WebKit ignores max-width on auto-layout table cells
+              when computing intrinsic widths, so long queries/IPs made the
+              whole table horizontally scrollable in Safari. Fixed layout
+              makes every cell clip/truncate instead. The Query column has no
+              width and absorbs all remaining space. */}
+          <Table className="table-fixed">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-8" />
                 <TableHead>Query</TableHead>
-                <TableHead>Model</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Latency</TableHead>
-                <TableHead>IP</TableHead>
-                <TableHead>
+                <TableHead className="w-56">Model</TableHead>
+                <TableHead className="w-44">Status</TableHead>
+                <TableHead className="w-24">Latency</TableHead>
+                <TableHead className="w-44">IP</TableHead>
+                <TableHead className="w-36">
                   <button
                     type="button"
                     onClick={() =>
@@ -352,7 +358,7 @@ export default function QueryLogPage() {
                         <ChevronRight className="h-4 w-4" />
                       )}
                     </TableCell>
-                    <TableCell className="max-w-xs truncate font-mono text-xs">
+                    <TableCell className="truncate font-mono text-xs" title={log.query_text}>
                       {log.query_text}
                     </TableCell>
                     <TableCell>
@@ -379,7 +385,10 @@ export default function QueryLogPage() {
                     <TableCell className="text-xs text-muted-foreground">
                       {log.latency_ms != null ? `${log.latency_ms}ms` : "—"}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell
+                      className="truncate text-xs text-muted-foreground"
+                      title={log.ip_address ?? undefined}
+                    >
                       {log.ip_address ?? "—"}
                     </TableCell>
                     <TableCell
