@@ -453,7 +453,13 @@ export default function QueryLogPage() {
                               </Button>
                             </div>
                           </div>
-                          <p className="max-h-40 overflow-y-auto whitespace-pre-wrap text-muted-foreground">
+                          {/* [overflow-wrap:anywhere] is load-bearing: long
+                              citation URLs are unbreakable words, and a table
+                              cell's min-content width grows to fit them —
+                              blowing the whole table past the viewport.
+                              `anywhere` (unlike break-words) shrinks the
+                              intrinsic width so the cell wraps instead. */}
+                          <p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-muted-foreground">
                             {log.response_text ?? "No response"}
                           </p>
                           {log.references.length > 0 && (
@@ -461,7 +467,7 @@ export default function QueryLogPage() {
                               <p className="font-medium">
                                 References ({log.references.length}):
                               </p>
-                              <ul className="list-inside list-disc text-muted-foreground">
+                              <ul className="list-inside list-disc break-words [overflow-wrap:anywhere] text-muted-foreground">
                                 {log.references.map((ref) => (
                                   <li key={ref.id}>
                                     {ref.title} ({ref.id})
@@ -602,7 +608,7 @@ function CandidatesPanel({ log }: { log: QueryLogEntry }) {
         >
           {c.title}
         </a>
-        <span className="font-mono text-[10px] text-muted-foreground">
+        <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
           {c.vector_score != null ? `vec ${c.vector_score.toFixed(3)}` : "vec —"}
           {c.lexical_rank != null ? ` · lex #${c.lexical_rank}` : ""}
         </span>
