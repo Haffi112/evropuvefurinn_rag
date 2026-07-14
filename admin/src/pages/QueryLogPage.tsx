@@ -464,7 +464,7 @@ export default function QueryLogPage() {
                               blowing the whole table past the viewport.
                               `anywhere` (unlike break-words) shrinks the
                               intrinsic width so the cell wraps instead. */}
-                          <p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-muted-foreground">
+                          <p className="max-h-40 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] text-muted-foreground">
                             {log.response_text ?? "No response"}
                           </p>
                           {log.references.length > 0 && (
@@ -472,7 +472,10 @@ export default function QueryLogPage() {
                               <p className="font-medium">
                                 References ({log.references.length}):
                               </p>
-                              <ul className="list-inside list-disc break-words [overflow-wrap:anywhere] text-muted-foreground">
+                              {/* no break-words here: twMerge treats it as
+                                  conflicting with the arbitrary overflow-wrap
+                                  property and silently drops the latter */}
+                              <ul className="list-inside list-disc [overflow-wrap:anywhere] text-muted-foreground">
                                 {log.references.map((ref) => (
                                   <li key={ref.id}>
                                     {ref.title} ({ref.id})
@@ -603,11 +606,15 @@ function CandidatesPanel({ log }: { log: QueryLogEntry }) {
         <span className="w-8 shrink-0 text-right font-mono text-xs text-muted-foreground">
           #{c.rank}
         </span>
+        {/* w-0 (not just min-w-0): WebKit feeds a truncate flex child's full
+            text width into the table cell's intrinsic width, overflowing the
+            table in Safari. An explicit zero base width stops that while
+            flex-1 still grows the link to fill the row. */}
         <a
           href={c.source_url}
           target="_blank"
           rel="noreferrer"
-          className="min-w-0 flex-1 truncate text-xs hover:underline"
+          className="w-0 flex-1 truncate text-xs hover:underline"
           title={`${c.title} (${c.id})`}
           onClick={(e) => e.stopPropagation()}
         >
