@@ -20,9 +20,13 @@ CHUNK_OVERLAP_WORDS = 40
 
 # How deep each individual ranked list goes before fusion.
 HYBRID_LIST_SIZE = 20
-# Chunk rows fetched per vector search (several chunks can share a parent
-# article, so we over-fetch before collapsing to article level).
-CHUNK_FETCH_LIMIT = 60
+# Chunk rows fetched per vector search. Must be generous: several chunks share
+# a parent article, and a handful of on-topic articles can occupy dozens of
+# the nearest chunk slots, crowding everything else out of the article list.
+# (Observed in production: an article ranked #9 at article level missed the
+# candidates entirely at LIMIT 60.) Requires hnsw.ef_search >= this value —
+# pgvector's default is 40, set per-transaction in _vector_search_articles.
+CHUNK_FETCH_LIMIT = 200
 # Standard reciprocal-rank-fusion dampening constant.
 RRF_K = 60
 
@@ -223,38 +227,45 @@ class EmbeddingService:
         table hasn't been backfilled yet, so a deploy without the backfill
         degrades to the old behaviour instead of returning nothing."""
         pool = get_pool()
-        rows = await pool.fetch(
-            """
-            WITH nearest AS (
-                SELECT article_id, 1 - (embedding <=> $1::vector) AS score
-                FROM article_chunks
-                WHERE embedding IS NOT NULL
-                ORDER BY embedding <=> $1::vector
-                LIMIT $2
-            ),
-            best AS (
-                SELECT article_id, max(score) AS score
-                FROM nearest GROUP BY article_id
-            )
-            SELECT a.id, a.title, a.question, a.source_url, a.date, b.score
-            FROM best b JOIN articles a ON a.id = b.article_id
-            ORDER BY b.score DESC
-            LIMIT $3
-            """,
-            vec, CHUNK_FETCH_LIMIT, limit,
-        )
-        if not rows:
-            rows = await pool.fetch(
-                """
-                SELECT id, title, question, source_url, date,
-                       1 - (embedding <=> $1::vector) AS score
-                FROM articles
-                WHERE embedding IS NOT NULL
-                ORDER BY embedding <=> $1::vector
-                LIMIT $2
-                """,
-                vec, limit,
-            )
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                # pgvector's HNSW scan only surfaces ef_search candidates
+                # (default 40); anything past that in LIMIT is garbage. Scope
+                # the raise to this transaction so other queries keep the
+                # cheap default.
+                await conn.execute(f"SET LOCAL hnsw.ef_search = {CHUNK_FETCH_LIMIT + 40}")
+                rows = await conn.fetch(
+                    """
+                    WITH nearest AS (
+                        SELECT article_id, 1 - (embedding <=> $1::vector) AS score
+                        FROM article_chunks
+                        WHERE embedding IS NOT NULL
+                        ORDER BY embedding <=> $1::vector
+                        LIMIT $2
+                    ),
+                    best AS (
+                        SELECT article_id, max(score) AS score
+                        FROM nearest GROUP BY article_id
+                    )
+                    SELECT a.id, a.title, a.question, a.source_url, a.date, b.score
+                    FROM best b JOIN articles a ON a.id = b.article_id
+                    ORDER BY b.score DESC
+                    LIMIT $3
+                    """,
+                    vec, CHUNK_FETCH_LIMIT, limit,
+                )
+                if not rows:
+                    rows = await conn.fetch(
+                        """
+                        SELECT id, title, question, source_url, date,
+                               1 - (embedding <=> $1::vector) AS score
+                        FROM articles
+                        WHERE embedding IS NOT NULL
+                        ORDER BY embedding <=> $1::vector
+                        LIMIT $2
+                        """,
+                        vec, limit,
+                    )
         return [
             {
                 "id": r["id"], "title": r["title"], "question": r["question"],
