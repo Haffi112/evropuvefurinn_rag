@@ -4,6 +4,7 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
+from app.config import get_settings
 from app.middleware.rate_limit import limiter
 from app.models.schemas import QueryRequest, QueryResponse
 from app.services.rag_service import RAGService
@@ -56,15 +57,22 @@ async def query_endpoint(request: Request, body: QueryRequest):
     ip_address = request.client.host if request.client else None
     start_time = time.monotonic()
     resolved_model = _resolve_model(body.model)
+    # The operator-configured RAG_TOP_K acts as a floor on the public API:
+    # deployed website widgets pin an explicit top_k in their payload (the
+    # live one sends 5), and without the floor a server-side retrieval-depth
+    # increase would never reach public traffic. Clients may still ask for
+    # MORE articles, just not fewer. Operator tools (playground/batch) call
+    # the internal endpoints, which pass top_k through untouched.
+    top_k = max(body.top_k, get_settings().rag_top_k)
     logger.info(
-        "Query received: stream=%s lang=%s model=%s resolved=%s ip=%s",
-        body.stream, body.language, body.model, resolved_model, ip_address,
+        "Query received: stream=%s lang=%s model=%s resolved=%s top_k=%s ip=%s",
+        body.stream, body.language, body.model, resolved_model, top_k, ip_address,
     )
 
     if body.stream:
         return EventSourceResponse(
             rag.process_query_stream(
-                body.query, body.top_k, body.language,
+                body.query, top_k, body.language,
                 ip_address=ip_address, start_time=start_time,
                 score_threshold=body.score_threshold,
                 include_thinking=body.include_thinking,
@@ -75,7 +83,7 @@ async def query_endpoint(request: Request, body: QueryRequest):
 
     try:
         response = await rag.process_query_json(
-            body.query, body.top_k, body.language,
+            body.query, top_k, body.language,
             ip_address=ip_address, start_time=start_time,
             score_threshold=body.score_threshold,
             include_thinking=body.include_thinking,

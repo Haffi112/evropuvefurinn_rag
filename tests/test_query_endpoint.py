@@ -13,7 +13,7 @@ class FakeRAG:
         self.calls: list[dict] = []
 
     async def process_query_json(self, query, top_k, language, **kwargs):
-        self.calls.append({"stream": False, "query": query, "kwargs": kwargs})
+        self.calls.append({"stream": False, "query": query, "top_k": top_k, "kwargs": kwargs})
         return {
             "query": query,
             "answer": "stub",
@@ -61,6 +61,22 @@ def client_and_fake(monkeypatch):
 
 def _post(client, **body):
     return client.post("/api/v1/query", json={"query": "Hvað er ESB?", "stream": False, **body})
+
+
+def test_top_k_below_configured_floor_is_raised(client_and_fake):
+    from app.config import get_settings
+
+    client, fake = client_and_fake
+    r = _post(client, top_k=3)
+    assert r.status_code == 200
+    assert fake.calls[-1]["top_k"] == get_settings().rag_top_k
+
+
+def test_top_k_above_floor_passes_through(client_and_fake):
+    client, fake = client_and_fake
+    r = _post(client, top_k=15)
+    assert r.status_code == 200
+    assert fake.calls[-1]["top_k"] == 15
 
 
 def test_omitted_model_resolves_to_flash(client_and_fake):

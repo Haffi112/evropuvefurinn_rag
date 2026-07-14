@@ -7,6 +7,7 @@ Runs one FIFO batch at a time. Respects neither cache nor daily Pro quota
 import asyncio
 import logging
 
+from app.config import get_settings
 from app.db import queries as db
 from app.services.rag_service import RAGService
 
@@ -74,7 +75,7 @@ class BatchWorker:
         try:
             response = await self._rag.process_query_json(
                 query=question,
-                top_k=5,
+                top_k=get_settings().rag_top_k,
                 language="is",
                 model_override="pro",
                 web_search=(mode == "websearch"),

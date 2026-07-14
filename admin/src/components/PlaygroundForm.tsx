@@ -41,7 +41,7 @@ export default function PlaygroundForm({ endpoint, getAuthHeaders, hint }: Playg
   const [status, setStatus] = useState("");
   const [thinking, setThinking] = useState("");
   const [scoreThreshold, setScoreThreshold] = useState<number | null>(null);
-  const [maxArticles, setMaxArticles] = useState(5);
+  const [maxArticles, setMaxArticles] = useState(10);
   const [showThinking, setShowThinking] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 

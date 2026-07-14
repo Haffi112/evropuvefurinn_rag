@@ -110,7 +110,7 @@ class DeleteResponse(BaseModel):
 class QueryRequest(BaseModel):
     query: str = Field(..., max_length=1000, description="The question to ask, in Icelandic or English.")
     stream: bool = Field(default=True, description="If true, return Server-Sent Events; if false, return JSON.")
-    top_k: int = Field(default=10, ge=1, le=20, description="Number of source articles to retrieve (1–20).")
+    top_k: int = Field(default=10, ge=1, le=20, description="Number of source articles to retrieve (1–20). The server-configured default acts as a floor: values below it are raised to it.")
     language: str = Field(default="auto", description="Response language: 'is', 'en', or 'auto' (detect from query).")
     score_threshold: float | None = Field(default=None, ge=0.0, le=1.0, description="Minimum relevance score to include a source (0.0–1.0). Omit to use the server default.")
     include_thinking: bool = Field(default=False, description="If true, include the model's chain-of-thought reasoning in the response.")
