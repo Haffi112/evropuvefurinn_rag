@@ -15,6 +15,11 @@ from app.services.visindavefur_export import to_vv_html
 
 logger = logging.getLogger(__name__)
 
+# How many fused retrieval candidates are kept in the query log. Wider than
+# top_k on purpose: the admin can spot articles that *should* have been cited
+# but ranked below the cutoff, and label them for the evaluation set.
+CANDIDATE_LOG_SIZE = 30
+
 
 def _query_hash(query: str, model_role: str = "auto") -> str:
     """SHA-256 of normalised query text, namespaced by model role.
@@ -168,6 +173,8 @@ class RAGService:
         references: list | None, scope_declined: bool, cached: bool,
         start_time: float | None, ip_address: str | None,
         reviewer_id: int | None = None, mode: str = "rag",
+        retrieval_candidates: list | None = None,
+        retrieval_top_k: int | None = None,
     ) -> int | None:
         try:
             latency_ms = round((time.monotonic() - start_time) * 1000) if start_time else None
@@ -177,6 +184,8 @@ class RAGService:
                 scope_declined=scope_declined, cached=cached,
                 latency_ms=latency_ms, ip_address=ip_address,
                 reviewer_id=reviewer_id, mode=mode,
+                retrieval_candidates=retrieval_candidates,
+                retrieval_top_k=retrieval_top_k,
             )
         except Exception:
             # Logged at ERROR (not WARNING): a persistent failure here means the
@@ -195,6 +204,51 @@ class RAGService:
             query_text, None, None, [], False, False, start_time, ip_address,
             mode=mode,
         )
+
+    # ── Retrieval (shared by JSON and streaming paths) ───────
+
+    async def _retrieve(
+        self, query: str, expansions: list[str], top_k: int, threshold: float,
+    ) -> tuple[list[str], dict[str, float], list[dict]]:
+        """Hybrid retrieval over the raw query plus its LLM expansions.
+
+        Returns ``(prompt_ids, score_map, candidates_log)``:
+        - prompt_ids: article ids to feed the LLM — the top_k *qualifying*
+          candidates in fused (RRF) order. A candidate qualifies if its best
+          chunk cosine score clears the threshold OR it was a lexical hit
+          (lexical matches have no comparable cosine score, and an exact
+          keyword hit like "ÁTVR" is precisely what the lexical arm is for).
+        - score_map: article id → best vector score (for relevance display).
+        - candidates_log: the full fused top-CANDIDATE_LOG_SIZE list for the
+          query log, each entry marked with whether it reached the prompt.
+        """
+        candidates = await self._embeddings.hybrid_search(
+            [query, *expansions], limit=CANDIDATE_LOG_SIZE,
+        )
+        qualified = [
+            c for c in candidates
+            if (c["vector_score"] is not None and c["vector_score"] >= threshold)
+            or c["lexical_rank"] is not None
+        ]
+        prompt_ids = [c["id"] for c in qualified[:top_k]]
+        in_prompt = set(prompt_ids)
+
+        candidates_log = [
+            {
+                "rank": i + 1,
+                "id": c["id"],
+                "title": c["title"],
+                "source_url": c["source_url"],
+                "rrf_score": round(c["rrf_score"], 5),
+                "vector_score": round(c["vector_score"], 4) if c["vector_score"] is not None else None,
+                "vector_rank": c["vector_rank"],
+                "lexical_rank": c["lexical_rank"],
+                "in_prompt": c["id"] in in_prompt,
+            }
+            for i, c in enumerate(candidates)
+        ]
+        score_map = {c["id"]: (c["vector_score"] or 0.0) for c in candidates}
+        return prompt_ids, score_map, candidates_log
 
     # ── JSON (non-streaming) mode ────────────────────────────
 
@@ -271,8 +325,8 @@ class RAGService:
                                                start_time, ip_address, reviewer_id=reviewer_id)
                 return QueryResponse(**cached, cached=True, query_id=query_id, query_log_id=log_id)
 
-        # Scope guard
-        scope = await self._llm.check_scope(query)
+        # Scope guard + query expansion (one Flash call)
+        scope, expansions = await self._llm.check_scope(query)
         if scope == "no":
             decline = (settings_service.get("prompt.decline_en") if language == "en"
                        else settings_service.get("prompt.decline_is"))
@@ -287,16 +341,19 @@ class RAGService:
                 query_log_id=log_id,
             )
 
-        # Vector search
-        matches = await self._embeddings.query(query, top_k=top_k)
-        article_ids = [m["id"] for m in matches if m["score"] >= threshold]
+        # Hybrid retrieval (vector over chunks + lexical, RRF-fused)
+        article_ids, score_map, candidates_log = await self._retrieve(
+            query, expansions, top_k, threshold,
+        )
         if not article_ids:
             no_result = (settings_service.get("prompt.no_results_en") if language == "en"
                          else settings_service.get("prompt.no_results_is"))
             flash_model = settings_service.get("model.flash_name")
             log_id = await self._log_query(query, no_result, flash_model,
                                            [], False, False, start_time, ip_address,
-                                           reviewer_id=reviewer_id)
+                                           reviewer_id=reviewer_id,
+                                           retrieval_candidates=candidates_log,
+                                           retrieval_top_k=top_k)
             return QueryResponse(
                 query=query, answer=no_result,
                 references=[], model_used=flash_model,
@@ -304,13 +361,12 @@ class RAGService:
                 query_log_id=log_id,
             )
 
-        # Fetch full articles, preserving vector-score order (ANY() doesn't)
+        # Fetch full articles, preserving fused-rank order (ANY() doesn't)
         articles = await db.get_articles_by_ids(article_ids)
         order = {aid: i for i, aid in enumerate(article_ids)}
         articles.sort(key=lambda a: order[a["id"]])
 
         # Generate answer (structured output returns references_used)
-        score_map = {m["id"]: m["score"] for m in matches}
         model_used, answer_text, thinking_text, references_used = await self._llm.generate_non_streaming(
             query, articles, language, include_thinking=include_thinking,
             model_override=model_override,
@@ -348,7 +404,9 @@ class RAGService:
         log_id = await self._log_query(query, answer_text, model_used,
                                        [r.model_dump() for r in references],
                                        False, False, start_time, ip_address,
-                                       reviewer_id=reviewer_id)
+                                       reviewer_id=reviewer_id,
+                                       retrieval_candidates=candidates_log,
+                                       retrieval_top_k=top_k)
         return QueryResponse(
             query=query, answer=answer_text, references=references,
             model_used=model_used, cached=False, query_id=query_id,
@@ -441,8 +499,8 @@ class RAGService:
             # Status: searching
             yield {"event": "status", "data": json.dumps({"stage": "searching", "message": "Leita í þekkingargrunni..."})}
 
-            # Scope guard
-            scope = await self._llm.check_scope(query)
+            # Scope guard + query expansion (one Flash call)
+            scope, expansions = await self._llm.check_scope(query)
             if scope == "no":
                 decline = (settings_service.get("prompt.decline_en") if language == "en"
                            else settings_service.get("prompt.decline_is"))
@@ -463,11 +521,12 @@ class RAGService:
                                       [], True, False, start_time, ip_address)
                 return
 
-            # Vector search
-            matches = await self._embeddings.query(query, top_k=top_k)
-            article_ids = [m["id"] for m in matches if m["score"] >= threshold]
+            # Hybrid retrieval (vector over chunks + lexical, RRF-fused)
+            article_ids, score_map, candidates_log = await self._retrieve(
+                query, expansions, top_k, threshold,
+            )
 
-            top_score = matches[0]["score"] if matches else 0.0
+            top_score = max((score_map.get(aid, 0.0) for aid in article_ids), default=0.0)
             yield {
                 "event": "context",
                 "data": json.dumps({"articles_found": len(article_ids), "top_score": round(top_score, 4)}),
@@ -485,14 +544,15 @@ class RAGService:
                     "data": json.dumps({"model_used": "none", "cached": False, "query_id": query_id}),
                 }
                 await self._log_query(query, no_result, "none",
-                                      [], False, False, start_time, ip_address)
+                                      [], False, False, start_time, ip_address,
+                                      retrieval_candidates=candidates_log,
+                                      retrieval_top_k=top_k)
                 return
 
-            # Fetch full articles, preserving vector-score order (ANY() doesn't)
+            # Fetch full articles, preserving fused-rank order (ANY() doesn't)
             articles = await db.get_articles_by_ids(article_ids)
             order = {aid: i for i, aid in enumerate(article_ids)}
             articles.sort(key=lambda a: order[a["id"]])
-            score_map = {m["id"]: m["score"] for m in matches}
 
             # Status: generating
             yield {"event": "status", "data": json.dumps({"stage": "generating", "message": "Bý til svar..."})}
@@ -559,7 +619,9 @@ class RAGService:
                 await db.cache_store(qhash, query, cache_data, article_ids, self._settings.query_cache_ttl_hours)
             await self._log_query(query, answer_text, model_used,
                                   references, False, False, start_time, ip_address,
-                                  reviewer_id=reviewer_id)
+                                  reviewer_id=reviewer_id,
+                                  retrieval_candidates=candidates_log,
+                                  retrieval_top_k=top_k)
 
         except Exception:
             logger.error("Stream failed for query_id=%s", query_id, exc_info=True)

@@ -51,6 +51,26 @@ CREATE INDEX IF NOT EXISTS idx_articles_embedding_hnsw
     ON articles USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
+-- Chunk-level embeddings for parent-document retrieval: search matches
+-- individual passages (so long/multi-topic articles stay findable), but the
+-- LLM always receives the whole parent article.
+CREATE TABLE IF NOT EXISTS article_chunks (
+    id          BIGSERIAL PRIMARY KEY,
+    article_id  TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    chunk_index INT NOT NULL,
+    content     TEXT NOT NULL,
+    embedding   vector(1024),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (article_id, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_article_chunks_embedding_hnsw
+    ON article_chunks USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
+CREATE INDEX IF NOT EXISTS idx_article_chunks_article
+    ON article_chunks (article_id);
+
 CREATE TABLE IF NOT EXISTS query_log (
     id              BIGSERIAL PRIMARY KEY,
     query_text      TEXT NOT NULL,
@@ -63,9 +83,32 @@ CREATE TABLE IF NOT EXISTS query_log (
     ip_address      TEXT,
     reviewer_id     BIGINT,
     mode            TEXT NOT NULL DEFAULT 'rag',  -- 'rag' | 'websearch'
+    -- Top retrieval candidates considered for this query (not only the ones
+    -- that reached the prompt), so recall misses stay visible to the admin.
+    retrieval_candidates JSONB NOT NULL DEFAULT '[]',
+    retrieval_top_k INTEGER,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_query_log_created_at ON query_log (created_at DESC);
+
+-- Ground-truth retrieval labels set by the admin from the query-log page.
+-- 'should_cite': a below-k candidate the answer should have cited (a recall
+-- miss); 'correct': an in-prompt reference judged correctly cited;
+-- 'irrelevant': an in-prompt reference judged not relevant. Together these
+-- rows form the seed of a retrieval evaluation set.
+CREATE TABLE IF NOT EXISTS retrieval_annotations (
+    id            BIGSERIAL PRIMARY KEY,
+    query_log_id  BIGINT NOT NULL REFERENCES query_log(id) ON DELETE CASCADE,
+    article_id    TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    label         TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ,
+    CONSTRAINT retrieval_annotations_label_check
+        CHECK (label IN ('should_cite', 'correct', 'irrelevant')),
+    UNIQUE (query_log_id, article_id)
+);
+CREATE INDEX IF NOT EXISTS idx_retrieval_annotations_query
+    ON retrieval_annotations (query_log_id);
 
 CREATE TABLE IF NOT EXISTS review_users (
     id          SERIAL PRIMARY KEY,
@@ -189,6 +232,21 @@ ALTER TABLE articles ALTER COLUMN author DROP NOT NULL;
 ALTER TABLE query_log ADD COLUMN IF NOT EXISTS reviewer_id BIGINT REFERENCES review_users(id);
 
 ALTER TABLE query_log ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'rag';
+
+-- Hybrid retrieval: lexical full-text search column over the whole article.
+-- The 'simple' config (no stemmer — Postgres has none for Icelandic) still
+-- nails the exact rare tokens (abbreviations like ÁTVR) that pure vector
+-- search misses. Generated column so it can never go stale.
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS search_tsv tsvector
+    GENERATED ALWAYS AS (
+        to_tsvector('simple'::regconfig, title || ' ' || question || ' ' || answer)
+    ) STORED;
+CREATE INDEX IF NOT EXISTS idx_articles_search_tsv
+    ON articles USING GIN (search_tsv);
+
+-- Retrieval-candidate logging (see query_log table comment in SCHEMA_SQL).
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS retrieval_candidates JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS retrieval_top_k INTEGER;
 UPDATE query_log
 SET mode = 'websearch'
 WHERE mode = 'rag' AND model_used LIKE '%:online';

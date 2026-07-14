@@ -229,6 +229,8 @@ async def insert_query_log(
     ip_address: str | None,
     reviewer_id: int | None = None,
     mode: str = "rag",
+    retrieval_candidates: list[dict] | None = None,
+    retrieval_top_k: int | None = None,
 ) -> int:
     pool = get_pool()
     # Empty-answer rows are kept for telemetry but routed straight to
@@ -253,8 +255,9 @@ async def insert_query_log(
             INSERT INTO query_log
                 (query_text, response_text, model_used, "references",
                  scope_declined, cached, latency_ms, ip_address,
-                 reviewer_id, mode, review_status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 reviewer_id, mode, review_status,
+                 retrieval_candidates, retrieval_top_k)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             RETURNING id
             """,
             query_text,
@@ -268,12 +271,15 @@ async def insert_query_log(
             reviewer_id,
             mode,
             review_status,
+            json.dumps(retrieval_candidates or []),
+            retrieval_top_k,
         )
 
 
 _QUERY_LOG_COLUMNS = (
     'id, query_text, response_text, model_used, mode, "references", '
-    "scope_declined, cached, latency_ms, ip_address, created_at, review_status"
+    "scope_declined, cached, latency_ms, ip_address, created_at, review_status, "
+    "retrieval_candidates, retrieval_top_k"
 )
 
 
@@ -570,6 +576,56 @@ async def get_query_log_detail(query_log_id: int) -> dict | None:
             query_log_id,
         )
         return dict(row) if row else None
+
+
+# ── Retrieval annotations (eval-set labels on logged candidates) ──
+
+async def set_retrieval_annotation(
+    query_log_id: int, article_id: str, label: str,
+) -> dict:
+    """Upsert the admin's label for one (query, article) pair.
+    label: 'should_cite' | 'correct' | 'irrelevant'."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO retrieval_annotations (query_log_id, article_id, label)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (query_log_id, article_id)
+            DO UPDATE SET label = EXCLUDED.label, updated_at = now()
+            RETURNING *
+            """,
+            query_log_id, article_id, label,
+        )
+        return dict(row)
+
+
+async def delete_retrieval_annotation(query_log_id: int, article_id: str) -> bool:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            DELETE FROM retrieval_annotations
+            WHERE query_log_id = $1 AND article_id = $2
+            RETURNING id
+            """,
+            query_log_id, article_id,
+        )
+        return row is not None
+
+
+async def get_retrieval_annotations(query_log_id: int) -> list[dict]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT article_id, label, created_at, updated_at
+            FROM retrieval_annotations
+            WHERE query_log_id = $1
+            """,
+            query_log_id,
+        )
+        return [dict(r) for r in rows]
 
 
 async def get_next_unreviewed_query(

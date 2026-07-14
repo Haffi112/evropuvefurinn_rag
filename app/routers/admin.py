@@ -20,6 +20,8 @@ from app.models.schemas import (
     QueryLogEntry,
     QueryLogListResponse,
     QueryLogStatsResponse,
+    RetrievalAnnotation,
+    RetrievalAnnotationList,
     ReviewPlaygroundRequest,
 )
 from app.models.review_schemas import (
@@ -70,15 +72,81 @@ async def list_query_logs(
         search=search,
         order=order,
     )
-    # Parse JSONB references from string if needed
+    # Parse JSONB columns from string if needed
     for log in logs:
         refs = log.get("references")
         if isinstance(refs, str):
             log["references"] = json.loads(refs)
+        cands = log.get("retrieval_candidates")
+        if isinstance(cands, str):
+            log["retrieval_candidates"] = json.loads(cands)
     total_pages = (total + per_page - 1) // per_page
     return QueryLogListResponse(
         logs=logs, total=total, page=page, per_page=per_page, total_pages=total_pages,
     )
+
+
+# ── Retrieval annotations ───────────────────────────────────
+
+_ALLOWED_ANNOTATION_LABELS = {"should_cite", "correct", "irrelevant"}
+
+
+class RetrievalAnnotationUpsert(BaseModel):
+    article_id: str
+    label: str  # 'should_cite' | 'correct' | 'irrelevant'
+
+
+@router.get(
+    "/query-log/{query_log_id}/annotations",
+    response_model=RetrievalAnnotationList,
+    summary="List retrieval annotations for a query",
+    description="The admin's ground-truth labels on this query's retrieval "
+    "candidates: 'should_cite' (a below-cutoff candidate the answer should "
+    "have cited), 'correct' (an in-prompt reference judged correctly cited), "
+    "or 'irrelevant' (an in-prompt reference judged not relevant). These rows "
+    "form the seed of the retrieval evaluation set.",
+)
+async def list_retrieval_annotations(query_log_id: int):
+    rows = await db.get_retrieval_annotations(query_log_id)
+    return RetrievalAnnotationList(
+        query_log_id=query_log_id,
+        annotations=[
+            RetrievalAnnotation(article_id=r["article_id"], label=r["label"])
+            for r in rows
+        ],
+    )
+
+
+@router.put(
+    "/query-log/{query_log_id}/annotations",
+    response_model=RetrievalAnnotation,
+    summary="Set (upsert) a retrieval annotation",
+)
+async def upsert_retrieval_annotation(query_log_id: int, body: RetrievalAnnotationUpsert):
+    if body.label not in _ALLOWED_ANNOTATION_LABELS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"label must be one of {sorted(_ALLOWED_ANNOTATION_LABELS)}",
+        )
+    if not await db.get_query_log_detail(query_log_id):
+        raise HTTPException(status_code=404, detail="Query log entry not found")
+    try:
+        row = await db.set_retrieval_annotation(query_log_id, body.article_id, body.label)
+    except Exception as exc:
+        # Most likely a foreign-key violation (unknown article_id)
+        raise HTTPException(status_code=422, detail=f"Could not save annotation: {exc}")
+    return RetrievalAnnotation(article_id=row["article_id"], label=row["label"])
+
+
+@router.delete(
+    "/query-log/{query_log_id}/annotations/{article_id}",
+    summary="Remove a retrieval annotation",
+)
+async def delete_retrieval_annotation(query_log_id: int, article_id: str):
+    ok = await db.delete_retrieval_annotation(query_log_id, article_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Annotation not found")
+    return {"deleted": True}
 
 
 @router.get(

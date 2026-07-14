@@ -35,6 +35,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
+interface RetrievalCandidate {
+  rank: number;
+  id: string;
+  title: string;
+  source_url: string;
+  rrf_score: number;
+  vector_score: number | null;
+  vector_rank: number | null;
+  lexical_rank: number | null;
+  in_prompt: boolean;
+}
+
 interface QueryLogEntry {
   id: number;
   query_text: string;
@@ -48,6 +60,15 @@ interface QueryLogEntry {
   created_at: string;
   review_status: string;
   mode: string;
+  retrieval_candidates: RetrievalCandidate[];
+  retrieval_top_k: number | null;
+}
+
+type AnnotationLabel = "should_cite" | "correct" | "irrelevant";
+
+interface RetrievalAnnotationList {
+  query_log_id: number;
+  annotations: Array<{ article_id: string; label: AnnotationLabel }>;
 }
 
 interface QueryLogList {
@@ -449,6 +470,9 @@ export default function QueryLogPage() {
                               </ul>
                             </>
                           )}
+                          {(log.retrieval_candidates?.length ?? 0) > 0 && (
+                            <CandidatesPanel log={log} />
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -507,6 +531,151 @@ export default function QueryLogPage() {
             </div>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Retrieval-candidate list for one query, split at the top_k cutoff.
+ *
+ * In-prompt candidates can be labelled "correct" / "irrelevant"; below-cutoff
+ * candidates can be labelled "should have cited". The labels are stored in
+ * retrieval_annotations and double as ground truth for a future retrieval
+ * evaluation set.
+ */
+function CandidatesPanel({ log }: { log: QueryLogEntry }) {
+  const queryClient = useQueryClient();
+  const annotations = useQuery<RetrievalAnnotationList>({
+    queryKey: ["retrieval-annotations", log.id],
+    queryFn: () => apiFetch(`/api/v1/admin/query-log/${log.id}/annotations`),
+  });
+  const [saving, setSaving] = useState<string | null>(null);
+
+  const labelByArticle = new Map(
+    (annotations.data?.annotations ?? []).map((a) => [a.article_id, a.label]),
+  );
+  const citedIds = new Set(log.references.map((r) => r.id));
+
+  async function toggleLabel(articleId: string, label: AnnotationLabel) {
+    setSaving(articleId);
+    try {
+      if (labelByArticle.get(articleId) === label) {
+        await apiFetch(
+          `/api/v1/admin/query-log/${log.id}/annotations/${encodeURIComponent(articleId)}`,
+          { method: "DELETE" },
+        );
+      } else {
+        await apiFetch(`/api/v1/admin/query-log/${log.id}/annotations`, {
+          method: "PUT",
+          body: JSON.stringify({ article_id: articleId, label }),
+        });
+      }
+      queryClient.invalidateQueries({
+        queryKey: ["retrieval-annotations", log.id],
+      });
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : String(e);
+      alert(`Could not save annotation: ${msg}`);
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  function candidateRow(c: RetrievalCandidate) {
+    const active = labelByArticle.get(c.id);
+    return (
+      <div
+        key={c.id}
+        className="flex flex-wrap items-center gap-2 rounded border bg-background/60 px-2 py-1.5"
+      >
+        <span className="w-8 shrink-0 text-right font-mono text-xs text-muted-foreground">
+          #{c.rank}
+        </span>
+        <a
+          href={c.source_url}
+          target="_blank"
+          rel="noreferrer"
+          className="min-w-0 flex-1 truncate text-xs hover:underline"
+          title={`${c.title} (${c.id})`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {c.title}
+        </a>
+        <span className="font-mono text-[10px] text-muted-foreground">
+          {c.vector_score != null ? `vec ${c.vector_score.toFixed(3)}` : "vec —"}
+          {c.lexical_rank != null ? ` · lex #${c.lexical_rank}` : ""}
+        </span>
+        {citedIds.has(c.id) && (
+          <Badge variant="secondary" className="text-[10px]">
+            cited
+          </Badge>
+        )}
+        <span className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+          {c.in_prompt ? (
+            <>
+              <Button
+                variant={active === "correct" ? "default" : "outline"}
+                size="sm"
+                className="h-6 px-2 text-[11px]"
+                disabled={saving === c.id}
+                onClick={() => toggleLabel(c.id, "correct")}
+                title="Mark this reference as correctly cited"
+              >
+                Correct
+              </Button>
+              <Button
+                variant={active === "irrelevant" ? "destructive" : "outline"}
+                size="sm"
+                className="h-6 px-2 text-[11px]"
+                disabled={saving === c.id}
+                onClick={() => toggleLabel(c.id, "irrelevant")}
+                title="Mark this reference as not relevant to the question"
+              >
+                Not relevant
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant={active === "should_cite" ? "default" : "outline"}
+              size="sm"
+              className="h-6 px-2 text-[11px]"
+              disabled={saving === c.id}
+              onClick={() => toggleLabel(c.id, "should_cite")}
+              title="Mark this article as one the answer should have cited"
+            >
+              Should have cited
+            </Button>
+          )}
+        </span>
+      </div>
+    );
+  }
+
+  const inPrompt = log.retrieval_candidates.filter((c) => c.in_prompt);
+  const belowCutoff = log.retrieval_candidates.filter((c) => !c.in_prompt);
+
+  return (
+    <div className="space-y-2">
+      <p className="font-medium">
+        Retrieval candidates ({log.retrieval_candidates.length}
+        {log.retrieval_top_k != null ? `, k=${log.retrieval_top_k}` : ""}):
+      </p>
+      {inPrompt.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">
+            Sent to model
+          </p>
+          {inPrompt.map(candidateRow)}
+        </div>
+      )}
+      {belowCutoff.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">
+            Below cutoff (not sent)
+          </p>
+          {belowCutoff.map(candidateRow)}
+        </div>
       )}
     </div>
   );

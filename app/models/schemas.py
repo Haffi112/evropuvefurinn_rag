@@ -110,7 +110,7 @@ class DeleteResponse(BaseModel):
 class QueryRequest(BaseModel):
     query: str = Field(..., max_length=1000, description="The question to ask, in Icelandic or English.")
     stream: bool = Field(default=True, description="If true, return Server-Sent Events; if false, return JSON.")
-    top_k: int = Field(default=5, ge=1, le=20, description="Number of source articles to retrieve (1–20).")
+    top_k: int = Field(default=10, ge=1, le=20, description="Number of source articles to retrieve (1–20).")
     language: str = Field(default="auto", description="Response language: 'is', 'en', or 'auto' (detect from query).")
     score_threshold: float | None = Field(default=None, ge=0.0, le=1.0, description="Minimum relevance score to include a source (0.0–1.0). Omit to use the server default.")
     include_thinking: bool = Field(default=False, description="If true, include the model's chain-of-thought reasoning in the response.")
@@ -143,7 +143,7 @@ class QueryRequest(BaseModel):
             "example": {
                 "query": "Hvað er Schengen-samkomulagið?",
                 "stream": True,
-                "top_k": 5,
+                "top_k": 10,
                 "language": "auto",
                 "model": "pro",
                 "format": "vv",
@@ -158,7 +158,7 @@ class ReviewPlaygroundRequest(BaseModel):
     language: str = Field(default="auto", description="Response language: 'is', 'en', or 'auto'.")
     web_search: bool = Field(default=False, description="Use web search instead of RAG knowledge base.")
     include_thinking: bool = Field(default=False, description="Include model chain-of-thought.")
-    top_k: int = Field(default=5, ge=1, le=20, description="Number of articles to retrieve (ignored when web_search=True).")
+    top_k: int = Field(default=10, ge=1, le=20, description="Number of articles to retrieve (ignored when web_search=True).")
     score_threshold: float | None = Field(default=None, ge=0.0, le=1.0, description="Min relevance score (ignored when web_search=True).")
     model: str | None = Field(default=None, description="Model override: 'pro' or 'flash'. Null = auto (quota-based).")
 
@@ -214,6 +214,21 @@ class QueryLogEntry(BaseModel):
     created_at: datetime
     review_status: str = "pending"
     mode: str = "rag"  # 'rag' | 'websearch' | 'error'
+    # Fused retrieval candidates considered for this query (top ~30), each
+    # {rank, id, title, source_url, rrf_score, vector_score, vector_rank,
+    #  lexical_rank, in_prompt} — empty for cached/web/declined queries.
+    retrieval_candidates: list[dict] = Field(default_factory=list)
+    retrieval_top_k: int | None = None
+
+
+class RetrievalAnnotation(BaseModel):
+    article_id: str
+    label: str  # 'should_cite' | 'correct' | 'irrelevant'
+
+
+class RetrievalAnnotationList(BaseModel):
+    query_log_id: int
+    annotations: list[RetrievalAnnotation]
 
 
 class QueryLogListResponse(BaseModel):

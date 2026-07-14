@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     query_cache_ttl_hours: int = 24
 
     # RAG
-    rag_top_k: int = 5
+    rag_top_k: int = 10
     rag_score_threshold: float = 0.3
 
     @property

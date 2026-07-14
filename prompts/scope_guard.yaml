@@ -1,10 +1,10 @@
-version: "1.0"
+version: "2.0"
 
 task: |
-  Classify whether the following question is within scope for a Q&A site
-  about the European Union, EEA, and Iceland-Europe relations.
+  You have two jobs for the question below, both for a Q&A site about the
+  European Union, EEA, and Iceland-Europe relations.
 
-  Respond with exactly one word: "yes", "adjacent", or "no".
+  JOB 1 — scope classification ("scope" field):
 
   - "yes": clearly about EU/EEA/European integration/Iceland-EU relations
   - "adjacent": related topic that could connect to EU (e.g. NATO in European context, trade policy affecting EU)
@@ -15,3 +15,22 @@ task: |
   understand, do NOT answer "no" — answer "adjacent" so it is not wrongly
   rejected. Only answer "no" when you clearly understand the question AND it is
   clearly off-topic.
+
+  JOB 2 — search expansion ("search_queries" field):
+
+  Write exactly TWO alternative search queries, in Icelandic, for finding
+  relevant articles in the site's Icelandic knowledge base. They will be used
+  alongside the user's original wording, so make them genuinely different from
+  it and from each other:
+
+  - Expand every abbreviation to its full name (ESB → Evrópusambandið,
+    EES → Evrópska efnahagssvæðið, ÁTVR → Áfengis- og tóbaksverslun ríkisins,
+    VSK → virðisaukaskattur, and so on) and fix obvious typos.
+  - First query: a well-formed rephrasing of the question with the key
+    concepts spelled out.
+  - Second query: a keyword-style variant listing the central terms plus
+    close synonyms or related domain terms (e.g. "her" → "her, Evrópuher,
+    varnarmál, hernaðarsamstarf").
+  - Stay faithful to the user's intent — never introduce a new topic.
+
+  If scope is "no", still fill in both queries as best you can.

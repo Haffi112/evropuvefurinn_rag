@@ -50,6 +50,68 @@ LLM_RESPONSE_SCHEMA = {
 }
 STRUCTURED_RESPONSE_FORMAT = {"type": "json_schema", "json_schema": LLM_RESPONSE_SCHEMA}
 
+# Scope guard + query expansion, one Flash call. The classifier verdict gates
+# answering as before; the two search_queries variants are embedded alongside
+# the raw question and fused, so terse or abbreviation-heavy queries
+# ("er esb með her") still reach the right articles.
+SCOPE_RESPONSE_SCHEMA = {
+    "name": "scope_and_expansion",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "scope": {
+                "type": "string",
+                "enum": ["yes", "adjacent", "no"],
+                "description": "Whether the question is in scope for the EU/EEA/Iceland Q&A site.",
+            },
+            "search_queries": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Exactly two alternative Icelandic search queries with abbreviations expanded and synonyms added.",
+            },
+        },
+        "required": ["scope", "search_queries"],
+        "additionalProperties": False,
+    },
+}
+SCOPE_RESPONSE_FORMAT = {"type": "json_schema", "json_schema": SCOPE_RESPONSE_SCHEMA}
+
+
+def _parse_scope_response(raw: str) -> tuple[str, list[str]]:
+    """Parse the scope guard's response into (scope, search_queries).
+
+    Accepts the structured `{"scope": ..., "search_queries": [...]}` envelope,
+    but also tolerates the legacy bare one-word reply (a DB prompt override
+    predating the expansion feature) and any malformed output — those return
+    an empty expansion list. Unknown scope values default to 'adjacent',
+    matching the old behaviour of never wrongly rejecting a question."""
+    text = _strip_code_fence(raw.strip())
+    scope = None
+    queries: list[str] = []
+
+    if text.startswith("{"):
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError:
+            obj = None
+        if isinstance(obj, dict):
+            candidate = str(obj.get("scope", "")).strip().lower()
+            if candidate in ("yes", "adjacent", "no"):
+                scope = candidate
+            raw_queries = obj.get("search_queries")
+            if isinstance(raw_queries, list):
+                queries = [str(q).strip() for q in raw_queries if str(q).strip()][:2]
+    else:
+        candidate = text.lower()
+        if candidate in ("yes", "adjacent", "no"):
+            scope = candidate
+
+    if scope is None:
+        logger.warning("Scope guard returned unexpected value: %r, defaulting to 'adjacent'", raw[:200])
+        scope = "adjacent"
+    return scope, queries
+
 
 _ENVELOPE_RE = re.compile(r'"answer"\s*:', re.DOTALL)
 _ANSWER_VALUE_RE = re.compile(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)"', re.DOTALL)
@@ -214,35 +276,38 @@ class LLMService:
             return default
         return None
 
-    # ── Scope guard ──────────────────────────────────────────
+    # ── Scope guard + query expansion ────────────────────────
 
-    async def check_scope(self, query: str) -> str:
-        """Returns 'yes', 'adjacent', or 'no'. Always uses Flash (no Pro quota)."""
+    async def check_scope(self, query: str) -> tuple[str, list[str]]:
+        """Classify scope AND expand the query for retrieval in one Flash call.
+
+        Returns ``(scope, search_queries)`` where scope is 'yes', 'adjacent',
+        or 'no' and search_queries holds up to two alternative retrieval
+        queries (abbreviations expanded, synonyms added). Degrades gracefully:
+        any parse failure — including a stale one-word prompt override in the
+        DB — yields the scope verdict with an empty expansion list, which
+        callers treat as "search with the raw query only".
+        """
         scope_prompt = settings_service.get("prompt.scope_guard")
         flash_model = settings_service.get("model.flash_name")
+        kwargs: dict = {
+            "messages": [{"role": "user", "content": f"{scope_prompt}\n\nQuestion: {query}"}],
+            "temperature": 0,
+            "response_format": SCOPE_RESPONSE_FORMAT,
+            "extra_headers": self._extra_headers,
+            "extra_body": {"provider": {"require_parameters": True}},
+        }
         try:
-            response = await self._client.chat.completions.create(
-                model=flash_model,
-                messages=[{"role": "user", "content": f"{scope_prompt}\n\nQuestion: {query}"}],
-                temperature=0,
-                extra_headers=self._extra_headers,
-            )
+            response = await self._client.chat.completions.create(model=flash_model, **kwargs)
         except APIError:
             fallback = self._fallback_model(flash_model, "flash")
             if fallback is None:
                 raise
             logger.warning("LLM API error with model %r, retrying with %r", flash_model, fallback)
-            response = await self._client.chat.completions.create(
-                model=fallback,
-                messages=[{"role": "user", "content": f"{scope_prompt}\n\nQuestion: {query}"}],
-                temperature=0,
-                extra_headers=self._extra_headers,
-            )
-        result = response.choices[0].message.content.strip().lower()
-        if result not in ("yes", "adjacent", "no"):
-            logger.warning("Scope guard returned unexpected value: %s, defaulting to 'adjacent'", result)
-            return "adjacent"
-        return result
+            response = await self._client.chat.completions.create(model=fallback, **kwargs)
+
+        raw = (response.choices[0].message.content or "").strip()
+        return _parse_scope_response(raw)
 
     # ── Model selection ──────────────────────────────────────
 
