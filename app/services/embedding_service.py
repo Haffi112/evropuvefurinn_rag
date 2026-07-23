@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import re
+from collections import OrderedDict
 
 import httpx
 import numpy as np
@@ -10,6 +12,23 @@ from app.db.database import get_pool
 logger = logging.getLogger(__name__)
 
 DEEPINFRA_EMBED_URL = "https://api.deepinfra.com/v1/openai/embeddings"
+
+# Retry policy for the DeepInfra embeddings call. evropuvefur.is funnels every
+# site visitor through a single server-side backend, so identical popular
+# questions arrive as bursts from one source and briefly outrun DeepInfra's
+# rate limit — a 429 that used to surface to the end user as a 500 (this is
+# what produced the query-log error spike). Retry transient failures (429 and
+# 5xx) with exponential backoff; permanent 4xx errors are not retried.
+EMBED_MAX_RETRIES = 3          # retries *after* the initial attempt
+EMBED_BACKOFF_BASE = 0.5       # seconds; doubled each successive retry
+EMBED_RETRY_AFTER_CAP = 30.0   # never honour a Retry-After longer than this
+EMBED_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+# Per-process LRU cache of query embeddings, keyed on the raw query text. A hot
+# preset question (e.g. "Chat control" was asked 132× in a single day) would
+# otherwise re-embed the identical string on every retrieval. multilingual-e5
+# vectors are 1024 floats (~8 KB), so this caps the cache near ~16 MB.
+QUERY_EMBED_CACHE_SIZE = 2048
 
 # Chunking geometry. multilingual-e5-large truncates input at 512 tokens and
 # Icelandic costs roughly 2-2.5 tokens per word on its tokenizer, so a chunk
@@ -48,6 +67,10 @@ class EmbeddingService:
     def __init__(self, settings: Settings):
         self._settings = settings
         self._client: httpx.AsyncClient | None = None
+        # LRU (insertion-ordered) cache of query embeddings; see
+        # QUERY_EMBED_CACHE_SIZE. Query-only: passage embeddings are unique and
+        # computed once at index time, so caching them would only waste memory.
+        self._query_cache: "OrderedDict[str, list[float]]" = OrderedDict()
 
     async def initialize(self) -> None:
         self._client = httpx.AsyncClient(
@@ -103,40 +126,108 @@ class EmbeddingService:
             for chunk in EmbeddingService._chunk_answer(answer)
         ]
 
-    async def embed_text(self, text: str, input_type: str = "passage") -> list[float]:
-        """Embed text via DeepInfra API. input_type: 'passage' or 'query'."""
-        prefix = "query: " if input_type == "query" else "passage: "
-        prefixed = prefix + text
+    @staticmethod
+    def _retry_delay(resp: httpx.Response, attempt: int) -> float:
+        """Backoff before the next retry. Honour a numeric Retry-After header
+        when present (capped), otherwise fall back to exponential backoff."""
+        retry_after = resp.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return min(float(retry_after), EMBED_RETRY_AFTER_CAP)
+            except ValueError:
+                pass  # HTTP-date form — ignore and use exponential backoff
+        return EMBED_BACKOFF_BASE * (2 ** attempt)
 
-        resp = await self._client.post(
-            DEEPINFRA_EMBED_URL,
-            json={
-                "model": self._settings.deepinfra_model,
-                "input": [prefixed],
-                "encoding_format": "float",
-            },
-        )
+    async def _post_embeddings(self, prefixed: list[str]) -> list[list[float]]:
+        """POST prefixed inputs to DeepInfra, returning embeddings in input
+        order. Retries transient failures (429/5xx) with exponential backoff;
+        any other error (or exhausting the retries) raises via raise_for_status.
+        """
+        payload = {
+            "model": self._settings.deepinfra_model,
+            "input": prefixed,
+            "encoding_format": "float",
+        }
+        resp: httpx.Response | None = None
+        for attempt in range(EMBED_MAX_RETRIES + 1):
+            resp = await self._client.post(DEEPINFRA_EMBED_URL, json=payload)
+            retryable = resp.status_code in EMBED_RETRYABLE_STATUS
+            if retryable and attempt < EMBED_MAX_RETRIES:
+                delay = self._retry_delay(resp, attempt)
+                logger.warning(
+                    "DeepInfra embeddings HTTP %d (attempt %d/%d), retrying in %.2fs",
+                    resp.status_code, attempt + 1, EMBED_MAX_RETRIES + 1, delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            # Success, permanent error, or last attempt: let raise_for_status
+            # turn any non-2xx into an exception, otherwise parse the result.
+            resp.raise_for_status()
+            data = resp.json()["data"]
+            data.sort(key=lambda x: x["index"])  # index order == input order
+            return [d["embedding"] for d in data]
+        # Unreachable: the final iteration always returns or raises above.
+        assert resp is not None
         resp.raise_for_status()
-        return resp.json()["data"][0]["embedding"]
+        return []
+
+    def _query_cache_get(self, text: str) -> list[float] | None:
+        emb = self._query_cache.get(text)
+        if emb is not None:
+            self._query_cache.move_to_end(text)  # mark most-recently-used
+        return emb
+
+    def _query_cache_put(self, text: str, embedding: list[float]) -> None:
+        self._query_cache[text] = embedding
+        self._query_cache.move_to_end(text)
+        while len(self._query_cache) > QUERY_EMBED_CACHE_SIZE:
+            self._query_cache.popitem(last=False)  # evict least-recently-used
+
+    async def embed_text(self, text: str, input_type: str = "passage") -> list[float]:
+        """Embed text via DeepInfra API. input_type: 'passage' or 'query'.
+        Query embeddings are served from (and stored in) the per-process LRU."""
+        if input_type == "query":
+            cached = self._query_cache_get(text)
+            if cached is not None:
+                return cached
+            embedding = (await self._post_embeddings(["query: " + text]))[0]
+            self._query_cache_put(text, embedding)
+            return embedding
+        return (await self._post_embeddings(["passage: " + text]))[0]
 
     async def embed_texts_batch(self, texts: list[str], input_type: str = "passage") -> list[list[float]]:
-        """Embed multiple texts in a single API call."""
-        prefix = "query: " if input_type == "query" else "passage: "
-        prefixed = [prefix + t for t in texts]
+        """Embed multiple texts in a single API call.
 
-        resp = await self._client.post(
-            DEEPINFRA_EMBED_URL,
-            json={
-                "model": self._settings.deepinfra_model,
-                "input": prefixed,
-                "encoding_format": "float",
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()["data"]
-        # Sort by index to guarantee order
-        data.sort(key=lambda x: x["index"])
-        return [d["embedding"] for d in data]
+        For query embeddings the per-process cache is consulted first and only
+        the cache misses are sent to DeepInfra — so a burst of the same popular
+        question embeds once, not once per request. Passage embeddings bypass
+        the cache (each is unique and computed a single time at index time).
+        """
+        if input_type != "query":
+            return await self._post_embeddings(["passage: " + t for t in texts])
+
+        cache_hits: dict[int, list[float]] = {}
+        missing_idx: list[int] = []
+        for i, t in enumerate(texts):
+            hit = self._query_cache_get(t)
+            if hit is None:
+                missing_idx.append(i)
+            else:
+                cache_hits[i] = hit
+
+        fetched: dict[int, list[float]] = {}
+        if missing_idx:
+            embeddings = await self._post_embeddings(
+                ["query: " + texts[i] for i in missing_idx]
+            )
+            for i, emb in zip(missing_idx, embeddings):
+                fetched[i] = emb
+                self._query_cache_put(texts[i], emb)
+
+        return [
+            cache_hits[i] if i in cache_hits else fetched[i]
+            for i in range(len(texts))
+        ]
 
     # ── Vector operations ────────────────────────────────────
 
